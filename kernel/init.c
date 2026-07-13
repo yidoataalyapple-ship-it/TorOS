@@ -136,26 +136,36 @@ void init_list_services(void)
 
 /* ===== Driver Loading ===== */
 
+/* Built-in driver init functions (from other subsystems) */
+extern void virtio_input_init(void);
+extern void virtio_gpu_init(void);
+extern void audio_init(void);
+extern void net_init(void);
+extern void block_init(void);
+extern void font_system_init(void);
+
+/* Wrappers: driver framework expects int-returning init functions */
+static int wrap_virtio_input_init(void) { virtio_input_init(); return 0; }
+static int wrap_virtio_gpu_init(void)   { virtio_gpu_init(); return 0; }
+static int wrap_audio_init(void)        { audio_init(); return 0; }
+static int wrap_net_init(void)          { net_init(); return 0; }
+static int wrap_block_init(void)        { block_init(); return 0; }
+static int wrap_font_init(void)         { font_system_init(); return 0; }
+
 void driver_init(void)
 {
     printk_color(TERM_YELLOW, "[BOOT] Driver Manager...\n");
     memset(drivers, 0, sizeof(drivers));
     num_drivers = 0;
 
-    /* Register built-in drivers */
-    extern void virtio_input_init(void);
-    extern void virtio_gpu_init(void);
-    extern void audio_init(void);
-    extern void net_init(void);
-    extern void block_init(void);
-    extern void font_system_init(void);
+    /* Register built-in drivers (wrappers defined at file scope) */
 
-    driver_register("virtio-input", DRIVER_TYPE_INPUT, NULL, virtio_input_init, NULL);
-    driver_register("virtio-gpu", DRIVER_TYPE_GPU, NULL, virtio_gpu_init, NULL);
-    driver_register("audio", DRIVER_TYPE_SOUND, NULL, audio_init, NULL);
-    driver_register("network", DRIVER_TYPE_NET, NULL, net_init, NULL);
-    driver_register("block", DRIVER_TYPE_BLOCK, NULL, block_init, NULL);
-    driver_register("font", DRIVER_TYPE_PCI, NULL, font_system_init, NULL);
+    driver_register("virtio-input", DRIVER_TYPE_INPUT, NULL, wrap_virtio_input_init, NULL);
+    driver_register("virtio-gpu", DRIVER_TYPE_GPU, NULL, wrap_virtio_gpu_init, NULL);
+    driver_register("audio", DRIVER_TYPE_SOUND, NULL, wrap_audio_init, NULL);
+    driver_register("network", DRIVER_TYPE_NET, NULL, wrap_net_init, NULL);
+    driver_register("block", DRIVER_TYPE_BLOCK, NULL, wrap_block_init, NULL);
+    driver_register("font", DRIVER_TYPE_PCI, NULL, wrap_font_init, NULL);
 
     printk_color(TERM_GREEN, "[BOOT] Driver manager: %d drivers registered\n", num_drivers);
 }
@@ -446,7 +456,7 @@ void boot_report(void)
     printk("  Users:     %d accounts\n", num_users);
     printk("  Sessions:  %d active\n", 0);
     printk("  Memory:    %lu KB free\n", (get_free_pages() * PAGE_SIZE) / 1024);
-    printk("  Network:   %s\n", nic.initialized ? "up" : "down");
+    printk("  Network:   %s\n", net_is_up() ? "up" : "down");
     printk("  Display:   %dx%d\n", FB_WIDTH, FB_HEIGHT);
     printk("  Security:  PrivLevels=%d, ASLR=%s, NX=%s\n",
            NUM_PRIV_LEVELS, aslr_enabled() ? "on" : "off",

@@ -9,7 +9,6 @@
 #include "../include/input.h"
 
 /* QEMU virt xHCI base address */
-#define XHCI_MMIO_BASE      0x09080000
 
 /* xHCI runtime structure */
 static xhci_controller_t xhci;
