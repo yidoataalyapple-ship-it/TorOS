@@ -8,6 +8,9 @@
 
 #include "toros.h"
 
+/* Forward declaration to avoid circular include with window.h */
+typedef struct window window_t;
+
 /* ===== Boot Stages ===== */
 #define BOOT_STAGE_ELF      1
 #define BOOT_STAGE_KERNEL   2

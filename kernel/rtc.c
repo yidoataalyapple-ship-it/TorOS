@@ -44,12 +44,12 @@ void rtc_time_string(char *buf, int max_len)
     datetime_t dt;
     seconds_to_dt(rtc_get_time(), &dt);
     char *p = buf;
-    p += utoa(dt.year, p, 10); *p++ = '-';
-    if (dt.month < 10) *p++ = '0'; p += utoa(dt.month, p, 10); *p++ = '-';
-    if (dt.day < 10) *p++ = '0'; p += utoa(dt.day, p, 10); *p++ = ' ';
-    if (dt.hour < 10) *p++ = '0'; p += utoa(dt.hour, p, 10); *p++ = ':';
-    if (dt.minute < 10) *p++ = '0'; p += utoa(dt.minute, p, 10); *p++ = ':';
-    if (dt.second < 10) *p++ = '0'; p += utoa(dt.second, p, 10);
+    utoa(dt.year, p, 10); p += strlen(p); *p++ = '-';
+    if (dt.month < 10) *p++ = '0'; utoa(dt.month, p, 10); p += strlen(p); *p++ = '-';
+    if (dt.day < 10) *p++ = '0'; utoa(dt.day, p, 10); p += strlen(p); *p++ = ' ';
+    if (dt.hour < 10) *p++ = '0'; utoa(dt.hour, p, 10); p += strlen(p); *p++ = ':';
+    if (dt.minute < 10) *p++ = '0'; utoa(dt.minute, p, 10); p += strlen(p); *p++ = ':';
+    if (dt.second < 10) *p++ = '0'; utoa(dt.second, p, 10); p += strlen(p);
     *p = '\0';
     (void)max_len;
 }

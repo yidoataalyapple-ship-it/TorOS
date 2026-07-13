@@ -5,7 +5,8 @@
 
 #include "../include/toros.h"
 
-static proc_t proc_table[NPROC];
+proc_t proc_table[NPROC];
+int proc_count = 0;
 static proc_t *current = NULL;
 static proc_t *ready_queue = NULL;
 static uint64 next_pid = 1;
@@ -49,6 +50,7 @@ proc_t *proc_create(const char *name, void (*entry)(void))
     for (int i = 0; i < NPROC; i++) {
         if (proc_table[i].state == PROC_UNUSED) {
             proc_t *p = &proc_table[i];
+            proc_count++;
             p->pid = next_pid++;
             p->state = PROC_RUNNABLE;
             strncpy(p->name, name, NAMELEN - 1);

@@ -4,6 +4,8 @@
  */
 
 #include "../include/toros.h"
+#include "../include/gpu.h"
+#include "../include/window.h"
 
 void kernel_main(void)
 {
@@ -49,6 +51,21 @@ void kernel_main(void)
     printk_color(TERM_YELLOW, "[BOOT] Framebuffer...\n");
     fb_init();
 
+    printk_color(TERM_YELLOW, "[BOOT] GPU Subsystem (VirtIO-GPU)...\n");
+    gpu_subsystem_init();
+
+    printk_color(TERM_YELLOW, "[BOOT] Window Manager...\n");
+    wm_init(FB_WIDTH, FB_HEIGHT);
+
+    printk_color(TERM_YELLOW, "[BOOT] Compositor...\n");
+    compositor_init(FB_WIDTH, FB_HEIGHT);
+
+    printk_color(TERM_YELLOW, "[BOOT] Desktop Shell...\n");
+    desktop_shell_init(FB_WIDTH, FB_HEIGHT);
+
+    printk_color(TERM_YELLOW, "[BOOT] Virtual Desktops (4)...\n");
+    vd_init(4);
+
     printk_color(TERM_YELLOW, "[BOOT] torFS...\n");
     tfs_init();
     tfs_create_sample();
@@ -66,7 +83,8 @@ void kernel_main(void)
     rtc_print_time();
     printk("\n");
     printk_color(TERM_GREEN, "Features: MMU GICv3 SMP torFS FB SCHED VM SPINLOCK\n");
-    printk_color(TERM_GREEN, "          INPUT VIRTIO-INPUT USB-XHCI USB-HID HOTPLUG\n\n");
+    printk_color(TERM_GREEN, "          INPUT VIRTIO-INPUT USB-XHCI USB-HID HOTPLUG\n");
+    printk_color(TERM_GREEN, "          VIRTIO-GPU WM COMPOSITOR DESKTOP VDESKTOP\n\n");
 
     proc_table_dump();
     printk("\n");
