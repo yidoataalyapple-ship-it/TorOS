@@ -1,5 +1,6 @@
 /*
- * torOS Kernel Main v0.3
+ * torOS Kernel Main v0.4
+ * Full desktop OS initialization
  */
 
 #include "../include/toros.h"
@@ -27,6 +28,21 @@ void kernel_main(void)
     printk_color(TERM_YELLOW, "[BOOT] RTC...\n");
     rtc_init();
 
+    printk_color(TERM_YELLOW, "[BOOT] Input Event Subsystem...\n");
+    input_subsystem_init();
+
+    printk_color(TERM_YELLOW, "[BOOT] VirtIO Input (Keyboard/Mouse)...\n");
+    virtio_input_init();
+
+    printk_color(TERM_YELLOW, "[BOOT] USB xHCI...\n");
+    xhci_init(XHCI_MMIO_BASE);
+
+    printk_color(TERM_YELLOW, "[BOOT] USB HID...\n");
+    usb_hid_init();
+
+    printk_color(TERM_YELLOW, "[BOOT] USB Hot-plug...\n");
+    usb_hotplug_init();
+
     printk_color(TERM_YELLOW, "[BOOT] Scheduler...\n");
     sched_init();
 
@@ -42,14 +58,15 @@ void kernel_main(void)
 
     printk("\n");
     printk_color(TERM_GREEN, "========================================\n");
-    printk_color(TERM_GREEN, "  torOS v0.3.0 boot complete!\n");
+    printk_color(TERM_GREEN, "  torOS v0.4.0 boot complete!\n");
     printk_color(TERM_GREEN, "========================================\n");
     printk("\n");
     printk_color(TERM_CYAN, "[SYS] Arch: ARM64, CPU: Cortex-A72 x%d\n", smp_cpu_count());
     printk_color(TERM_CYAN, "[SYS] RAM: 2GB, EL: %d\n", (r_currentel() >> 2) & 3);
     rtc_print_time();
     printk("\n");
-    printk_color(TERM_GREEN, "Features: MMU GICv3 SMP torFS FB SCHED VM SPINLOCK\n\n");
+    printk_color(TERM_GREEN, "Features: MMU GICv3 SMP torFS FB SCHED VM SPINLOCK\n");
+    printk_color(TERM_GREEN, "          INPUT VIRTIO-INPUT USB-XHCI USB-HID HOTPLUG\n\n");
 
     proc_table_dump();
     printk("\n");
