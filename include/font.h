@@ -61,7 +61,6 @@ typedef struct {
     ttf_point_t *points;
     int num_points;
     uint16 *contour_ends;
-    int num_contours;
     int advance_width;
     int left_side_bearing;
     uint8 *bitmap;      /* Rasterized bitmap */
