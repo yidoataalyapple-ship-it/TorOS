@@ -112,6 +112,40 @@ void desktop_shell_draw(uint32 *fb, int fb_w, int fb_h)
     }
 }
 
+/* Clipped wallpaper draw (for damage-region compositing, FAZ 3.3) */
+void desktop_shell_draw_clipped(uint32 *fb, int fb_w, int fb_h, clip_region_t *clip)
+{
+    if (!shell.initialized || !fb || !clip)
+        return;
+
+    int wp_h = fb_h - (int)shell.taskbar_height;
+    if (wp_h > (int)shell.wallpaper_height)
+        wp_h = (int)shell.wallpaper_height;
+
+    for (region_rect_t *r = clip->rects; r; r = r->next) {
+        int y1 = r->y < 0 ? 0 : r->y;
+        int y2 = r->y + r->h;
+        if (y2 > wp_h) y2 = wp_h;
+        int x1 = r->x < 0 ? 0 : r->x;
+        int x2 = r->x + r->w;
+        if (x2 > fb_w) x2 = fb_w;
+
+        for (int y = y1; y < y2; y++) {
+            for (int x = x1; x < x2; x++) {
+                if (shell.wallpaper)
+                    fb[y * fb_w + x] = shell.wallpaper[y * shell.wallpaper_width + x];
+                else
+                    fb[y * fb_w + x] = 0xFF0078D7;
+            }
+        }
+    }
+}
+
+uint32 desktop_shell_taskbar_height(void)
+{
+    return shell.initialized ? shell.taskbar_height : 0;
+}
+
 void desktop_shell_draw_taskbar(uint32 *fb, int fb_w, int fb_h)
 {
     if (!shell.initialized || !fb)
