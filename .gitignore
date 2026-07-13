@@ -1,0 +1,7 @@
+*.o
+*.elf
+*.img
+*.d
+__pycache__/
+*.pyc
+.vscode/
