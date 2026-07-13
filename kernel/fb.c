@@ -250,3 +250,18 @@ int fb_is_initialized(void)
 {
     return fb_initialized;
 }
+
+/* ===== Framebuffer accessors (for compositor/debug) ===== */
+
+uint32 *fb_get_base(void)
+{
+    return fb_base;
+}
+
+/* Present a full-screen ARGB buffer into the visible framebuffer */
+void fb_present(const uint32 *src)
+{
+    if (!fb_base || !src)
+        return;
+    memcpy(fb_base, src, (usize)FB_WIDTH * FB_HEIGHT * sizeof(uint32));
+}
