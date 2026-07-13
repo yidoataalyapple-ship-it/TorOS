@@ -1,65 +1,61 @@
 /*
- * torOS Kernel Main
- * Entry point from assembly
+ * torOS Kernel Main v0.3
  */
 
 #include "../include/toros.h"
 
 void kernel_main(void)
 {
-    /* 1. Initialize UART for serial output */
     uart_init();
     print_logo();
 
-    /* 2. Initialize memory management */
-    printk_color(TERM_YELLOW, "[BOOT] Initializing memory management...\n");
+    printk_color(TERM_YELLOW, "[BOOT] Memory manager...\n");
     mm_init();
-    printk_color(TERM_GREEN, "[BOOT] Memory: %d pages (%d MB) available\n",
-                 get_free_pages(), (get_free_pages() * PAGE_SIZE) / (1024 * 1024));
 
-    /* 3. Initialize virtual memory / MMU */
-    printk_color(TERM_YELLOW, "[BOOT] Initializing virtual memory...\n");
+    printk_color(TERM_YELLOW, "[BOOT] Virtual memory...\n");
     vm_init();
 
-    /* 4. Initialize GICv3 interrupt controller */
-    printk_color(TERM_YELLOW, "[BOOT] Initializing GICv3...\n");
+    printk_color(TERM_YELLOW, "[BOOT] GICv3...\n");
     gic_init();
 
-    /* 5. Initialize interrupts/traps */
-    printk_color(TERM_YELLOW, "[BOOT] Initializing trap handlers...\n");
+    printk_color(TERM_YELLOW, "[BOOT] Trap handlers...\n");
     trap_init();
-    printk_color(TERM_GREEN, "[BOOT] Trap handlers installed\n");
 
-    /* 6. Initialize timer */
-    printk_color(TERM_YELLOW, "[BOOT] Initializing timer...\n");
+    printk_color(TERM_YELLOW, "[BOOT] Timer...\n");
     timer_init();
-    printk_color(TERM_GREEN, "[BOOT] Timer running\n");
 
-    /* 7. Initialize scheduler */
-    printk_color(TERM_YELLOW, "[BOOT] Initializing scheduler...\n");
+    printk_color(TERM_YELLOW, "[BOOT] RTC...\n");
+    rtc_init();
+
+    printk_color(TERM_YELLOW, "[BOOT] Scheduler...\n");
     sched_init();
-    printk_color(TERM_GREEN, "[BOOT] Scheduler ready\n");
 
-    /* 8. Initialize framebuffer */
-    printk_color(TERM_YELLOW, "[BOOT] Initializing framebuffer...\n");
+    printk_color(TERM_YELLOW, "[BOOT] Framebuffer...\n");
     fb_init();
 
-    /* 9. Print system info */
-    printk("\n");
-    printk_color(TERM_CYAN, "[INFO] torOS v0.2.0 booted successfully on ARM64\n");
-    printk_color(TERM_CYAN, "[INFO] CPU ID: %x\n", r_mpidr());
-    printk_color(TERM_CYAN, "[INFO] Current EL: %d\n", (r_currentel() >> 2) & 3);
-    printk_color(TERM_CYAN, "[INFO] Virtual Memory: MMU enabled (4-level paging)\n");
-    printk_color(TERM_CYAN, "[INFO] Interrupts: GICv3 + Generic Timer @ 100Hz\n");
-    printk_color(TERM_CYAN, "[INFO] Graphics: Framebuffer 1024x768\n");
-    printk("\n");
+    printk_color(TERM_YELLOW, "[BOOT] torFS...\n");
+    tfs_init();
+    tfs_create_sample();
 
-    /* 10. Dump process table */
+    printk_color(TERM_YELLOW, "[BOOT] SMP...\n");
+    smp_init();
+
+    printk("\n");
+    printk_color(TERM_GREEN, "========================================\n");
+    printk_color(TERM_GREEN, "  torOS v0.3.0 boot complete!\n");
+    printk_color(TERM_GREEN, "========================================\n");
+    printk("\n");
+    printk_color(TERM_CYAN, "[SYS] Arch: ARM64, CPU: Cortex-A72 x%d\n", smp_cpu_count());
+    printk_color(TERM_CYAN, "[SYS] RAM: 2GB, EL: %d\n", (r_currentel() >> 2) & 3);
+    rtc_print_time();
+    printk("\n");
+    printk_color(TERM_GREEN, "Features: MMU GICv3 SMP torFS FB SCHED VM SPINLOCK\n\n");
+
     proc_table_dump();
     printk("\n");
+    tfs_ls();
 
-    /* 11. Start shell */
-    printk_color(TERM_GREEN, "[BOOT] Starting torOS Shell...\n\n");
+    printk_color(TERM_GREEN, "[BOOT] Starting shell...\n\n");
     shell_run();
 
     panic("kernel_main returned!");
