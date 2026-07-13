@@ -1,0 +1,44 @@
+# GitHub Actions CI şablonu — TorOS Faz 1
+#
+# Kullanım: repo kökünde .github/workflows/ altına kopyalayın.
+# (Bu oturumdaki GitHub token'ında workflow yazma izni olmadığından
+#  dosya şablon olarak docs/ altında tutuluyor.)
+
+name: TorOS Faz 1 CI
+
+on:
+  push:
+    branches: [ faz1-input ]
+  pull_request:
+    branches: [ faz1-input ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: faz1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain + QEMU kur
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-system-arm python3
+
+      - name: Kernel derle
+        run: make CROSS_COMPILE=aarch64-linux-gnu-
+
+      - name: Smoke test (boot + klavye + fare + torFS)
+        run: |
+          timeout 240 python3 scripts/smoke_test.py \
+            --qemu qemu-system-aarch64 --kernel kernel.elf
+
+      - name: Kernel artifact yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: toros-kernel
+          path: |
+            faz1/kernel.elf
+            faz1/kernel.img
