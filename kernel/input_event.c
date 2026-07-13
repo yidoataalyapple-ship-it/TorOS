@@ -490,3 +490,9 @@ int input_wait_for_event(input_event_t *evt, uint32 timeout_ms)
         wfe();
     }
 }
+
+/* Read next event from the global queue (FAZ 1.4 unified layer helper) */
+int input_read_event(input_event_t *evt)
+{
+    return input_event_read(&input_subsys.global_buffer, evt);
+}

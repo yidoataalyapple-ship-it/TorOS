@@ -24,7 +24,8 @@ typedef enum {
     WIDGET_CHECKBOX,
     WIDGET_RADIO,
     WIDGET_SLIDER,
-    WIDGET_COMBOBOX
+    WIDGET_COMBOBOX,
+    WIDGET_TREEVIEW
 } widget_type_t;
 
 /* ===== Widget States ===== */
@@ -242,7 +243,7 @@ typedef struct {
 } checkbox_widget_t;
 
 /* ===== Radio ===== */
-typedef struct {
+typedef struct radio_widget {
     widget_t base;
     int selected;
     int circle_size;
@@ -383,6 +384,44 @@ void cbo_clear(combobox_widget_t *cbo);
 void cbo_select(combobox_widget_t *cbo, int idx);
 int cbo_get_selected(combobox_widget_t *cbo);
 const char *cbo_get_text(combobox_widget_t *cbo);
+
+/* ===== TreeView (FAZ 4.5) ===== */
+#define TV_MAX_NODES    128
+#define TV_ITEM_LEN     48
+#define TV_INDENT       20      /* 20px per level (spec) */
+#define TV_ROW_HEIGHT   18
+
+typedef struct {
+    char text[TV_ITEM_LEN];
+    int level;          /* depth in hierarchy */
+    int has_children;   /* shows +/- toggle */
+    int expanded;       /* children visible */
+    void *user_data;
+} tv_node_t;
+
+typedef struct {
+    widget_t base;
+    tv_node_t nodes[TV_MAX_NODES];
+    int node_count;
+    int selected_idx;   /* index in nodes[] (not visible-row) */
+    int top_idx;
+} treeview_widget_t;
+
+treeview_widget_t *tv_create(window_t *parent, int x, int y, int w, int h);
+int tv_add_node(treeview_widget_t *tv, const char *text, int level, int has_children);
+void tv_draw(treeview_widget_t *tv);
+void tv_toggle(treeview_widget_t *tv, int node_idx);
+void tv_expand_all(treeview_widget_t *tv);
+void tv_collapse_all(treeview_widget_t *tv);
+int tv_get_selected(treeview_widget_t *tv);
+const char *tv_get_selected_text(treeview_widget_t *tv);
+
+/* ===== Radio Button (FAZ 4.11) ===== */
+radio_widget_t *rad_create(window_t *parent, int x, int y, int w, int h, const char *text);
+void rad_draw(radio_widget_t *rad);
+void rad_set_selected(radio_widget_t *rad, int selected);
+int rad_get_selected(radio_widget_t *rad);
+void rad_group_link(radio_widget_t *a, radio_widget_t *b);
 
 /* ===== Draw Helpers ===== */
 void widget_draw_rect(int x, int y, int w, int h, uint32 color, uint32 *fb, int fb_w, int fb_h);
