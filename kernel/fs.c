@@ -240,3 +240,39 @@ void tfs_create_sample(void)
     tfs_write("todo.txt", t, strlen(t), 0);
     printk_color(TERM_GREEN, "[FS] Sample files created\n");
 }
+
+/* ===== Enumeration API (for file manager / apps) ===== */
+
+int tfs_count_used(void)
+{
+    int count = 0;
+    if (!files)
+        return 0;
+    for (int i = 0; i < TFS_MAX_FILES; i++) {
+        if (files[i].used)
+            count++;
+    }
+    return count;
+}
+
+int tfs_get_used_name(int idx, char *name_out, uint32 *size_out)
+{
+    if (!files || idx < 0)
+        return 0;
+    int seen = 0;
+    for (int i = 0; i < TFS_MAX_FILES; i++) {
+        if (files[i].used) {
+            if (seen == idx) {
+                if (name_out) {
+                    strncpy(name_out, files[i].name, TFS_MAX_FILENAME - 1);
+                    name_out[TFS_MAX_FILENAME - 1] = '\0';
+                }
+                if (size_out)
+                    *size_out = files[i].size;
+                return 1;
+            }
+            seen++;
+        }
+    }
+    return 0;
+}

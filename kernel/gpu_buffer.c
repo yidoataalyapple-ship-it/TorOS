@@ -323,8 +323,8 @@ void gpu_buffer_copy_to_fb(void)
     if (!buffer_initialized || !buffer_mgr.front)
         return;
 
-    extern uint32 *fb_base;
-    extern int fb_initialized;
+    uint32 *fb_base = fb_get_base();
+    int fb_initialized = fb_is_initialized();
 
     if (fb_initialized && fb_base) {
         uint32 copy_size = buffer_mgr.width * buffer_mgr.height;
