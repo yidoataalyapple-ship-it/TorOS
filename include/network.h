@@ -382,4 +382,6 @@ uint16 ntohs(uint16 v);
 uint32 htonl(uint32 v);
 uint32 ntohl(uint32 v);
 
+int net_is_up(void);
+
 #endif

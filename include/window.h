@@ -38,7 +38,7 @@ typedef enum {
 #define ZORDER_OVERLAY      20000
 
 /* Title bar constants */
-#define TITLEBAR_HEIGHT     24
+#define TITLEBAR_HEIGHT     30   /* FAZ 3.4 spec: 30px title bar */
 #define BORDER_WIDTH        4
 #define BUTTON_SIZE         18
 #define BUTTON_MARGIN       2
@@ -93,6 +93,10 @@ typedef struct window {
     struct window *sibling; /* Next sibling */
     struct window *next;    /* Global window list */
     void *user_data;        /* Application data */
+    /* Saved geometry for maximize/restore */
+    int saved_x, saved_y, saved_w, saved_h;
+    /* Occlusion culling flag (compositor per-frame) */
+    int occluded;
 } window_t;
 
 /* Window manager */
@@ -253,9 +257,14 @@ void clip_blit(clip_region_t *clip, uint32 *dst, int dst_w, int dst_h,
                uint32 *src, int src_w, int src_h,
                int dx, int dy, int sx, int sy, int w, int h);
 
+/* Visible region (occlusion culling): part of window not covered by higher windows */
+void wm_compute_visible_region(window_t *win, clip_region_t *out);
+
 /* ========== Desktop Shell API ========== */
 void desktop_shell_init(uint32 width, uint32 height);
 void desktop_shell_draw(uint32 *fb, int fb_w, int fb_h);
+void desktop_shell_draw_clipped(uint32 *fb, int fb_w, int fb_h, clip_region_t *clip);
+uint32 desktop_shell_taskbar_height(void);
 void desktop_shell_draw_taskbar(uint32 *fb, int fb_w, int fb_h);
 void desktop_shell_draw_start_menu(uint32 *fb, int fb_w, int fb_h);
 void desktop_shell_draw_clock(uint32 *fb, int fb_w, int fb_h);
