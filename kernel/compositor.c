@@ -188,6 +188,12 @@ void compositor_compose_window(window_t *win)
                                win->x, win->y, win->full_width, win->full_height);
     }
 
+    /* Render widgets into the window's own framebuffer first (FAZ 4) */
+    if (win->style & WS_CAPTION || win->id != 1) {
+        extern void widget_draw_all(window_t *win);
+        widget_draw_all(win);
+    }
+
     /* Blit window content */
     if (comp.enable_transparency) {
         compositor_blit_alpha(comp.compose_buffer, comp.compose_width, comp.compose_height,
@@ -207,7 +213,6 @@ void compositor_compose_window(window_t *win)
 
                 uint32 pixel = win->framebuffer[y * win->full_width + x];
                 uint8 alpha = (pixel >> 24) & 0xFF;
-
                 if (alpha == 0xFF) {
                     comp.compose_buffer[dst_y * comp.compose_width + dst_x] = pixel;
                 } else if (alpha > 0) {
@@ -246,12 +251,34 @@ void compositor_compose(void)
     extern void desktop_shell_draw(uint32 *fb, int fb_w, int fb_h);
     desktop_shell_draw(comp.compose_buffer, comp.compose_width, comp.compose_height);
 
-    /* Compose all windows in z-order */
+    /* Compose all windows in z-order (back-to-front) */
     extern window_manager_t wm;
-    window_t *win = wm.window_list;
 
+    /* Occlusion culling: precompute which windows are fully covered by
+     * a single higher window (common case: maximized window on top) */
+    window_t *win = wm.window_list;
     while (win) {
-        if (win->state != WSTATE_MINIMIZED && win->state != WSTATE_HIDDEN) {
+        win->occluded = 0;
+        if (win->state != WSTATE_MINIMIZED && win->state != WSTATE_HIDDEN &&
+            (win->flags & WS_VISIBLE)) {
+            for (window_t *top = win->next; top; top = top->next) {
+                if (top->state == WSTATE_MINIMIZED || top->state == WSTATE_HIDDEN ||
+                    !(top->flags & WS_VISIBLE))
+                    continue;
+                if (top->x <= win->x && top->y <= win->y &&
+                    top->x + top->full_width >= win->x + win->full_width &&
+                    top->y + top->full_height >= win->y + win->full_height) {
+                    win->occluded = 1;
+                    break;
+                }
+            }
+        }
+        win = win->next;
+    }
+
+    win = wm.window_list;
+    while (win) {
+        if (win->state != WSTATE_MINIMIZED && win->state != WSTATE_HIDDEN && !win->occluded) {
             compositor_compose_window(win);
 
             /* Draw decorations on top */
@@ -268,23 +295,73 @@ void compositor_compose(void)
     desktop_shell_draw_taskbar(comp.compose_buffer, comp.compose_width, comp.compose_height);
 }
 
-/* Compose only a specific rectangle (damage region) */
+/* Compose only a specific rectangle (damage region tracking, FAZ 3.2/3.3) */
 void compositor_compose_rect(int x, int y, int w, int h)
 {
     if (!comp.initialized || !comp.compose_buffer)
         return;
 
-    /* Clamp to bounds */
+    /* Clamp to screen bounds */
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
-    if (x + w > (int)comp.compose_width) w = comp.compose_width - x;
+    if (x + w > (int)comp.compose_width)  w = comp.compose_width - x;
     if (y + h > (int)comp.compose_height) h = comp.compose_height - y;
     if (w <= 0 || h <= 0)
         return;
 
-    /* For now, do full compose */
-    /* A real implementation would only compose the damaged region */
-    compositor_compose();
+    /* Damage clip region */
+    clip_region_t dmg;
+    clip_region_init(&dmg);
+    clip_region_add_rect(&dmg, x, y, w, h);
+
+    /* 1. Desktop background, clipped to damage region */
+    extern void desktop_shell_draw_clipped(uint32 *fb, int fb_w, int fb_h, clip_region_t *clip);
+    desktop_shell_draw_clipped(comp.compose_buffer, comp.compose_width, comp.compose_height, &dmg);
+
+    /* 2. Windows back-to-front, only those intersecting the damage rect */
+    extern window_manager_t wm;
+    for (window_t *win = wm.window_list; win; win = win->next) {
+        if (win->state == WSTATE_MINIMIZED || win->state == WSTATE_HIDDEN)
+            continue;
+        if (!(win->flags & WS_VISIBLE))
+            continue;
+        if (!clip_region_intersects(&dmg, win->x, win->y, win->full_width, win->full_height))
+            continue;
+
+        /* Render widgets, then blit window content clipped to the damage region */
+        if (win->style & WS_CAPTION || win->id != 1) {
+            extern void widget_draw_all(window_t *win);
+            widget_draw_all(win);
+        }
+        if (win->framebuffer) {
+            if (comp.enable_shadows && (win->style & WS_CAPTION)) {
+                compositor_draw_shadow(comp.compose_buffer, comp.compose_width,
+                                       comp.compose_height, win->x, win->y,
+                                       win->full_width, win->full_height);
+            }
+            clip_blit(&dmg, comp.compose_buffer, comp.compose_width, comp.compose_height,
+                      win->framebuffer, win->full_width, win->full_height,
+                      win->x, win->y, 0, 0, win->full_width, win->full_height);
+        }
+
+        /* Decorations (drawn only for intersecting windows) */
+        if (win->style & WS_CAPTION) {
+            extern void wm_draw_decorations(window_t *win, uint32 *fb, int fb_w, int fb_h);
+            wm_draw_decorations(win, comp.compose_buffer, comp.compose_width, comp.compose_height);
+        }
+    }
+
+    /* 3. Taskbar if the damage rect touches it */
+    extern uint32 desktop_shell_taskbar_height(void);
+    int tb_h = (int)desktop_shell_taskbar_height();
+    if (tb_h > 0 && clip_region_intersects(&dmg, 0, comp.compose_height - tb_h,
+                                           comp.compose_width, tb_h)) {
+        extern void desktop_shell_draw_taskbar(uint32 *fb, int fb_w, int fb_h);
+        desktop_shell_draw_taskbar(comp.compose_buffer, comp.compose_width, comp.compose_height);
+    }
+
+    clip_region_free(&dmg);
+    comp.frame_counter++;
 }
 
 void compositor_set_shadows(int enable)
