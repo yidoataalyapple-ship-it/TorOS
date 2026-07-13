@@ -590,4 +590,3 @@ int vfs_unlink(const char *path) { (void)path; return 0; }
 int vfs_stat(const char *path, void *statbuf) { (void)path; (void)statbuf; return 0; }
 int vfs_readdir(const char *path, void *buffer, uint32 size) { (void)path; (void)buffer; (void)size; return 0; }
 partition_t *partition_find_by_name(const char *name) { (void)name; return NULL; }
-#endif
