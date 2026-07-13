@@ -6,7 +6,7 @@
 #include "../include/toros.h"
 #include "../include/window.h"
 
-static window_manager_t wm;
+window_manager_t wm;
 
 /* Decoration colors */
 #define DECOR_ACTIVE_TITLE      0xFF0078D7
@@ -182,17 +182,25 @@ void wm_maximize_window(window_t *win)
     if (!win || win->state == WSTATE_MAXIMIZED)
         return;
 
-    /* Save current position for restore */
+    /* Save current geometry for restore */
+    win->saved_x = win->x;
+    win->saved_y = win->y;
+    win->saved_w = win->width;
+    win->saved_h = win->height;
+
     win->flags |= WF_DIRTY;
     win->state = WSTATE_MAXIMIZED;
 
-    /* Fill entire desktop */
+    /* Fill entire desktop work area (above taskbar) */
+    extern uint32 desktop_shell_taskbar_height(void);
+    int tb_h = (int)desktop_shell_taskbar_height();
+
     win->x = 0;
     win->y = 0;
     win->width = wm.desktop_width;
-    win->height = wm.desktop_height;
+    win->height = wm.desktop_height - tb_h;
     win->full_width = wm.desktop_width;
-    win->full_height = wm.desktop_height;
+    win->full_height = wm.desktop_height - tb_h;
 
     win->flags |= WF_NEED_REDRAW;
     wm_invalidate_rect(0, 0, wm.desktop_width, wm.desktop_height);
@@ -202,9 +210,30 @@ void wm_restore_window(window_t *win)
 {
     if (!win)
         return;
+
+    int was_maximized = (win->state == WSTATE_MAXIMIZED);
+
+    /* Invalidate current (maximized) area before restoring */
+    wm_invalidate_rect(win->x, win->y, win->full_width, win->full_height);
+
     win->state = WSTATE_NORMAL;
     win->flags |= WS_VISIBLE | WF_NEED_REDRAW | WF_DIRTY;
-    /* Restore position would need saved state */
+
+    /* Restore saved geometry if coming from maximized state */
+    if (was_maximized && win->saved_w > 0 && win->saved_h > 0) {
+        win->x = win->saved_x;
+        win->y = win->saved_y;
+        win->width = win->saved_w;
+        win->height = win->saved_h;
+        if (win->style & WS_CAPTION) {
+            win->full_width = win->saved_w + BORDER_WIDTH * 2;
+            win->full_height = win->saved_h + BORDER_WIDTH + TITLEBAR_HEIGHT;
+        } else {
+            win->full_width = win->saved_w;
+            win->full_height = win->saved_h;
+        }
+    }
+
     wm_invalidate_rect(win->x, win->y, win->full_width, win->full_height);
 }
 
