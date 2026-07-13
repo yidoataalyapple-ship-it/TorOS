@@ -501,7 +501,6 @@ int sys_connect(int fd, const sockaddr_in_t *addr, socklen_t len)
     sockets[fd].remote_addr = *addr;
 
     if (sockets[fd].type == SOCK_STREAM) {
-        /* TCP 3-way handshake simplified */
         sockets[fd].state = SOCK_STATE_ESTABLISHED;
         sockets[fd].seq_num = (uint32)get_jiffies();
     } else {
@@ -518,7 +517,6 @@ int sys_send(int fd, const void *buf, uint32 len, int flags)
     if (sock->state != SOCK_STATE_ESTABLISHED) return -1;
 
     if (sock->type == SOCK_STREAM) {
-        /* TCP send */
         uint8 packet[20 + 65536];
         tcp_header_t *tcp = (tcp_header_t *)packet;
         tcp->src_port = sock->local_addr.port;
@@ -536,7 +534,6 @@ int sys_send(int fd, const void *buf, uint32 len, int flags)
         sock->seq_num += len;
         return len;
     } else if (sock->type == SOCK_DGRAM) {
-        /* UDP send */
         uint8 packet[8 + 65536];
         udp_header_t *udp = (udp_header_t *)packet;
         udp->src_port = sock->local_addr.port;
@@ -557,7 +554,6 @@ int sys_recv(int fd, void *buf, uint32 len, int flags)
     socket_t *sock = &sockets[fd];
     if (sock->state != SOCK_STATE_ESTABLISHED) return -1;
 
-    /* Poll for data */
     uint8 packet[2048];
     int pkt_len;
     int timeout = 100;
@@ -566,7 +562,6 @@ int sys_recv(int fd, void *buf, uint32 len, int flags)
     }
 
     if (pkt_len > 0) {
-        /* Parse packet */
         eth_header_t *eth = (eth_header_t *)packet;
         if (ntohs(eth->type) == ETH_TYPE_IP) {
             ip_header_t *ip = (ip_header_t *)(packet + ETH_HDR_LEN);
@@ -618,7 +613,6 @@ int sys_setsockopt(int fd, int level, int optname, const void *optval, socklen_t
 void udp_handle_packet(const ip_header_t *ip, const uint8 *data, uint32 len)
 {
     (void)ip; (void)data; (void)len;
-    /* Route to socket */
 }
 
 /* ===== TCP Handler ===== */
@@ -652,17 +646,15 @@ int dns_resolve(const char *hostname, uint32 *ip)
 
     printk_color(TERM_CYAN, "[DNS] Resolving: %s\n", hostname);
 
-    /* Build DNS query */
     uint8 query[512];
     dns_header_t *hdr = (dns_header_t *)query;
     hdr->id = htons(0x1234);
-    hdr->flags = htons(0x0100); /* Standard query, recursion desired */
+    hdr->flags = htons(0x0100);
     hdr->questions = htons(1);
     hdr->answers = 0;
     hdr->authority = 0;
     hdr->additional = 0;
 
-    /* Encode hostname */
     uint8 *qname = query + 12;
     const char *p = hostname;
     while (*p) {
@@ -675,13 +667,11 @@ int dns_resolve(const char *hostname, uint32 *ip)
     }
     *qname++ = 0;
 
-    /* QTYPE and QCLASS */
     *(uint16 *)qname = htons(DNS_TYPE_A); qname += 2;
     *(uint16 *)qname = htons(DNS_CLASS_IN); qname += 2;
 
     uint32 query_len = (uint32)(qname - query);
 
-    /* Send UDP */
     sockaddr_in_t dns_addr;
     dns_addr.family = AF_INET;
     dns_addr.port = htons(DNS_PORT);
@@ -692,32 +682,25 @@ int dns_resolve(const char *hostname, uint32 *ip)
 
     sys_sendto(sock, query, query_len, 0, &dns_addr, sizeof(dns_addr));
 
-    /* Receive */
     uint8 response[512];
-    uint32 src_ip;
-    uint16 src_port;
     int rlen = sys_recvfrom(sock, response, sizeof(response), 0, NULL, NULL);
     sys_close(sock);
 
     if (rlen < (int)(12 + 16)) return -1;
 
-    /* Parse response - skip header and question */
     dns_header_t *resp_hdr = (dns_header_t *)response;
     uint16 num_answers = ntohs(resp_hdr->answers);
     if (num_answers == 0) return -1;
 
-    /* Skip question section */
     uint8 *ptr = response + query_len;
 
-    /* Parse first answer */
     for (int i = 0; i < num_answers; i++) {
-        /* Skip name (pointer or label) */
         if ((*ptr & 0xC0) == 0xC0) ptr += 2;
         else { while (*ptr) ptr += *ptr + 1; ptr++; }
 
         uint16 type = ntohs(*(uint16 *)ptr); ptr += 2;
-        /* uint16 class = ntohs(*(uint16 *)ptr); */ ptr += 2;
-        /* uint32 ttl = ntohl(*(uint32 *)ptr); */ ptr += 4;
+        ptr += 2;
+        ptr += 4;
         uint16 rdlen = ntohs(*(uint16 *)ptr); ptr += 2;
 
         if (type == DNS_TYPE_A && rdlen == 4) {
@@ -732,7 +715,7 @@ int dns_resolve(const char *hostname, uint32 *ip)
     return -1;
 }
 
-/* ===== HTTP ===== */
+/* ===== HTTP Client ===== */
 
 http_client_t *http_create(void)
 {
@@ -755,7 +738,6 @@ int http_get(http_client_t *http, const char *url)
 {
     if (!http || !url) return -1;
 
-    /* Parse URL */
     const char *p = url;
     http->use_ssl = 0;
     http->port = HTTP_PORT;
@@ -775,14 +757,12 @@ int http_get(http_client_t *http, const char *url)
 
     strncpy(http->url, url, HTTP_MAX_URL - 1);
 
-    /* Resolve host */
     uint32 ip;
     if (dns_resolve(http->host, &ip) < 0) {
         printk_color(TERM_RED, "[HTTP] DNS failed for %s\n", http->host);
         return -1;
     }
 
-    /* Connect */
     http->socket = sys_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (http->socket < 0) return -1;
 
@@ -797,18 +777,20 @@ int http_get(http_client_t *http, const char *url)
         return -1;
     }
 
-    /* Send GET request */
-    snprintf(http->request, HTTP_MAX_HDR,
-             "GET %s HTTP/1.1\r\n"
-             "Host: %s\r\n"
-             "User-Agent: torOS/0.4\r\n"
-             "Connection: close\r\n"
-             "\r\n",
-             http->path, http->host);
+    /* Use fixed-size buffer for request */
+    char request_buf[512];
+    int req_len = 0;
+    req_len += snprintf(request_buf + req_len, sizeof(request_buf) - req_len,
+             "GET %s HTTP/1.1\r\n", http->path);
+    req_len += snprintf(request_buf + req_len, sizeof(request_buf) - req_len,
+             "Host: %s\r\n", http->host);
+    req_len += snprintf(request_buf + req_len, sizeof(request_buf) - req_len,
+             "User-Agent: torOS/0.4\r\n");
+    req_len += snprintf(request_buf + req_len, sizeof(request_buf) - req_len,
+             "Connection: close\r\n\r\n");
 
-    sys_send(http->socket, http->request, strlen(http->request), 0);
+    sys_send(http->socket, request_buf, req_len, 0);
 
-    /* Receive response */
     int total = 0;
     int rlen;
     while ((rlen = sys_recv(http->socket, http->response + total, HTTP_MAX_HDR - total - 1, 0)) > 0) {
@@ -816,14 +798,12 @@ int http_get(http_client_t *http, const char *url)
     }
     http->response[total] = '\0';
 
-    /* Parse status */
     if (strncmp(http->response, "HTTP/1.1 ", 9) == 0 || strncmp(http->response, "HTTP/1.0 ", 9) == 0) {
         http->status_code = (http->response[9] - '0') * 100 +
                             (http->response[10] - '0') * 10 +
                             (http->response[11] - '0');
     }
 
-    /* Find body */
     char *body_start = strstr(http->response, "\r\n\r\n");
     if (body_start) {
         body_start += 4;
@@ -837,7 +817,6 @@ int http_get(http_client_t *http, const char *url)
         }
     }
 
-    /* Find Content-Length */
     char *cl = strstr(http->response, "Content-Length: ");
     if (cl) http->content_length = atoi(cl + 16);
 
@@ -851,7 +830,6 @@ int http_get(http_client_t *http, const char *url)
 int http_post(http_client_t *http, const char *url, const uint8 *data, uint32 len)
 {
     (void)http; (void)url; (void)data; (void)len;
-    /* Similar to GET but with POST body */
     return -1;
 }
 
@@ -859,7 +837,7 @@ const uint8 *http_get_body(http_client_t *http, uint32 *len)
 { if (len) *len = http ? http->body_size : 0; return http ? http->body : NULL; }
 int http_get_status(http_client_t *http) { return http ? http->status_code : 0; }
 
-/* ===== TLS (simplified stub) ===== */
+/* ===== TLS Stub ===== */
 
 tls_context_t *tls_create(int socket)
 {
@@ -875,7 +853,6 @@ void tls_free(tls_context_t *tls) { if (tls) kfree(tls); }
 int tls_handshake(tls_context_t *tls)
 {
     if (!tls) return -1;
-    /* Simplified: just mark as done */
     tls->handshake_done = 1;
     return 0;
 }
@@ -891,6 +868,8 @@ int tls_recv(tls_context_t *tls, uint8 *buffer, uint32 max_len)
     if (!tls || !tls->handshake_done) return -1;
     return sys_recv(tls->socket, buffer, max_len, 0);
 }
+
+/* ===== Socket Helpers ===== */
 
 int sys_sendto(int fd, const void *buf, uint32 len, int flags, const sockaddr_in_t *addr, socklen_t addrlen)
 {
@@ -916,42 +895,3 @@ int sys_accept(int fd, sockaddr_in_t *addr, socklen_t *len)
     (void)addr; (void)len; (void)fd;
     return -1;
 }
-
-static int snprintf(char *buf, uint32 size, const char *fmt, ...)
-{
-    /* Simplified snprintf */
-    va_list args;
-    va_start(args, fmt);
-    int ret = vsnprintf(buf, size, fmt, args);
-    va_end(args);
-    return ret;
-}
-
-static int vsnprintf(char *buf, uint32 size, const char *fmt, va_list args)
-{
-    (void)args;
-    strncpy(buf, fmt, size - 1);
-    buf[size - 1] = '\0';
-    return strlen(buf);
-}
-
-static int atoi(const char *s)
-{
-    int val = 0;
-    while (*s >= '0' && *s <= '9') val = val * 10 + (*s++ - '0');
-    return val;
-}
-
-static float sinf(float x)
-{
-    /* Taylor series approximation */
-    float term = x;
-    float sum = x;
-    float x2 = x * x;
-    for (int i = 1; i < 7; i++) {
-        term *= -x2 / ((2 * i) * (2 * i + 1));
-        sum += term;
-    }
-    return sum;
-}
-#endif
