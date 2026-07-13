@@ -1,5 +1,6 @@
 /*
  * torOS printk - Formatted output
+ * v0.4.0 - Full desktop OS
  */
 
 #include "../include/toros.h"
@@ -137,21 +138,21 @@ void print_logo(void)
 {
     uart_puts("\033[36m");
     uart_puts("\n");
-    uart_puts("    XXXXXXXXXXX XXXXXXXXXX XXXXXXXXXXX  XXXXXXXXXXX\n");
-    uart_puts("   XXXXXXXX X   XX XX XX XXXXXXXXXXX X XXXXXXXXXX\n");
-    uart_puts("   X   XXXX X   XXX XXX  XXX    X  X   XXXX X\n");
-    uart_puts("       XXX     XXX      XXXXXXX       XXX    \n");
-    uart_puts("       XXX     XXX      XXXXXXX       XXX    \n");
-    uart_puts("       XXX     XXX      XXX  X        XXX    \n");
-    uart_puts("       XXXXX   XXXXX    XXXXX         XXXXX   \n");
-    uart_puts("       XXXXX   XXXXX    XXXXX         XXXXX    \n");
+    uart_puts("   ███████████  ███████████   ██████████   ███████████\n");
+    uart_puts("   ██████████   ████████████  ███████████  ████████████\n");
+    uart_puts("       ████     ████   ████  ████   ████  ████   ████\n");
+    uart_puts("       ████     ████   ████  ██████████   ███████████\n");
+    uart_puts("       ████     ████   ████  ███████████  ████████████\n");
+    uart_puts("       ████     ████   ████  ████    ████        ████\n");
+    uart_puts("       ██████   ██████████   ████    ████  ██████████\n");
+    uart_puts("       ██████   ██████████   ████    ████  ███████████\n");
     uart_puts("\033[0m");
     uart_puts("\n");
     uart_puts("\033[32m");
-    uart_puts("  =============================================\n");
-    uart_puts("      torOS v0.1.0 - ARM64 (AArch64)\n");
-    uart_puts("      Modern Operating System Kernel\n");
-    uart_puts("      Built from scratch\n");
-    uart_puts("  =============================================\n");
+    uart_puts("  ╔═══════════════════════════════════════════════════════╗\n");
+    uart_puts("  ║     TorOS v0.4.0 — ARM64 (AArch64) Bare-Metal OS     ║\n");
+    uart_puts("  ║     Full Desktop Operating System                     ║\n");
+    uart_puts("  ║     MMU · GICv3 · SMP · VirtIO · TCP/IP · GUI        ║\n");
+    uart_puts("  ╚═══════════════════════════════════════════════════════╝\n");
     uart_puts("\033[0m\n");
 }
