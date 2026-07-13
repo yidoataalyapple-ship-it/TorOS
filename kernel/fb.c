@@ -3,6 +3,7 @@
  * Simple graphics output for QEMU virt machine
  * 
  * 1024x768 @ 32bpp with 8x8 bitmap font
+ * v0.4.0 - Full desktop OS
  */
 
 #include "../include/toros.h"
@@ -155,11 +156,11 @@ void fb_init(void)
                  FB_WIDTH, FB_HEIGHT, fb_base);
     
     fb_set_color(COLOR_CYAN);
-    fb_draw_string(16, 16, "torOS v0.2.0 - ARM64 OS");
+    fb_draw_string(16, 16, "TorOS v0.4.0 - ARM64 Bare-Metal OS");
     fb_set_color(COLOR_GREEN);
-    fb_draw_string(16, 32, "Framebuffer active - Graphics mode");
+    fb_draw_string(16, 32, "Full Desktop Operating System");
     fb_set_color(COLOR_GRAY);
-    fb_draw_string(16, 56, "=== torOS Graphics Console ===");
+    fb_draw_string(16, 56, "MMU GICv3 SMP VirtIO TCP/IP GUI Audio Security");
 }
 
 void fb_clear(uint32 color)
