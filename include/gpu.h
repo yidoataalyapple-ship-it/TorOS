@@ -88,14 +88,14 @@ typedef struct {
     uint32 format;
     uint32 width;
     uint32 height;
-} __attribute__((packed)) virtio_gpu_resource_create_2d;
+} __attribute__((packed)) virtio_gpu_resource_create_2d_req;
 
 /* Resource unref */
 typedef struct {
     virtio_gpu_ctrl_hdr hdr;
     uint32 resource_id;
     uint32 padding;
-} __attribute__((packed)) virtio_gpu_resource_unref;
+} __attribute__((packed)) virtio_gpu_resource_unref_req;
 
 /* Set scanout */
 typedef struct {
@@ -103,7 +103,7 @@ typedef struct {
     virtio_gpu_rect r;
     uint32 scanout_id;
     uint32 resource_id;
-} __attribute__((packed)) virtio_gpu_set_scanout;
+} __attribute__((packed)) virtio_gpu_set_scanout_req;
 
 /* Resource flush */
 typedef struct {
@@ -111,7 +111,7 @@ typedef struct {
     virtio_gpu_rect r;
     uint32 resource_id;
     uint32 padding;
-} __attribute__((packed)) virtio_gpu_resource_flush;
+} __attribute__((packed)) virtio_gpu_resource_flush_req;
 
 /* Transfer to host 2D */
 typedef struct {
@@ -120,7 +120,7 @@ typedef struct {
     uint64 offset;
     uint32 resource_id;
     uint32 padding;
-} __attribute__((packed)) virtio_gpu_transfer_to_host_2d;
+} __attribute__((packed)) virtio_gpu_transfer_to_host_2d_req;
 
 /* Memory entry for backing */
 typedef struct {
@@ -134,7 +134,7 @@ typedef struct {
     virtio_gpu_ctrl_hdr hdr;
     uint32 resource_id;
     uint32 nr_entries;
-} __attribute__((packed)) virtio_gpu_resource_attach_backing;
+} __attribute__((packed)) virtio_gpu_resource_attach_backing_req;
 
 /* Cursor commands */
 #define VIRTIO_GPU_CMD_UPDATE_CURSOR       0x0300
@@ -159,6 +159,7 @@ typedef struct gpu_resource {
     uint32 stride;
     uint32 size;
     void *backing;
+    uint64 paddr;      /* Physical address of backing (DMA) */
     uint32 attached;
     struct gpu_resource *next;
 } gpu_resource_t;

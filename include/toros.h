@@ -54,10 +54,24 @@ void *kmalloc(usize s); void kfree(void *p);
 
 /* ===== String / libc ===== */
 void *memcpy(void *d, const void *s, usize n); void *memset(void *d, int c, usize n);
+void *memmove(void *d, const void *s, usize n);
 int strcmp(const char *s1, const char *s2); usize strlen(const char *s);
 char *strcpy(char *d, const char *s); char *strncpy(char *d, const char *s, usize n);
 int strncmp(const char *s1, const char *s2, usize n);
+char *strcat(char *d, const char *s); char *strncat(char *d, const char *s, usize n);
+char *strstr(const char *h, const char *n);
+int atoi(const char *s); double atof(const char *s); int abs(int v);
+int snprintf(char *buf, usize size, const char *fmt, ...);
+int vsnprintf(char *buf, usize size, const char *fmt, __builtin_va_list ap);
+float sinf(float x);
 char *itoa(int64 v, char *b, int base); char *utoa(uint64 v, char *b, int base);
+
+/* ===== va_list (freestanding, GCC builtins) ===== */
+typedef __builtin_va_list va_list;
+#define va_start(v,l)  __builtin_va_start(v,l)
+#define va_end(v)      __builtin_va_end(v)
+#define va_arg(v,T)    __builtin_va_arg(v,T)
+#define va_copy(d,s)   __builtin_va_copy(d,s)
 
 /* ===== Virtual Memory ===== */
 void vm_init(void); int vm_user_map(uint64 va, uint64 pa, uint64 f);
@@ -107,7 +121,7 @@ void fb_init(void); void fb_clear(uint32 c); void fb_putpixel(int x, int y, uint
 void fb_draw_char(int x, int y, char c, uint32 col); void fb_set_color(uint32 c);
 void fb_draw_string(int x, int y, const char *s); void fb_draw_line(int x0, int y0, int x1, int y1, uint32 c);
 void fb_draw_rect(int x, int y, int w, int h, uint32 c); void fb_draw_border(int x, int y, int w, int h, uint32 c);
-int fb_is_initialized(void);
+int fb_is_initialized(void); uint32 *fb_get_base(void); void fb_present(const uint32 *src);
 
 /* ===== User Programs ===== */
 void user_run(const char *n); void user_list(void); proc_t *user_proc_create(const char *n, void (*e)(void));
@@ -116,6 +130,7 @@ void user_run(const char *n); void user_list(void); proc_t *user_proc_create(con
 void tfs_init(void); int tfs_create(const char *n); int tfs_write(const char *n, const void *d, uint32 s, uint32 o);
 int tfs_read(const char *n, void *b, uint32 s, uint32 o); int tfs_delete(const char *n);
 int tfs_size(const char *n); void tfs_ls(void); void tfs_stat(void); void tfs_create_sample(void);
+int tfs_count_used(void); int tfs_get_used_name(int idx, char *name_out, uint32 *size_out);
 
 /* ===== RTC ===== */
 void rtc_init(void); uint64 rtc_get_time(void); void rtc_time_string(char *b, int m);
