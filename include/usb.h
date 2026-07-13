@@ -6,6 +6,11 @@
 #ifndef _USB_H
 #define _USB_H
 
+/* QEMU virt machine xHCI controller MMIO base (PCI BAR0) */
+#ifndef XHCI_MMIO_BASE
+#define XHCI_MMIO_BASE          0x09080000
+#endif
+
 /* USB standard constants */
 #define USB_MAX_DEVICES         128
 #define USB_MAX_ENDPOINTS       16

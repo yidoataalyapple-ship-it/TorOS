@@ -210,6 +210,7 @@ int input_event_read(input_event_buffer_t *buf, input_event_t *evt);
 int input_event_write(input_event_buffer_t *buf, input_event_t *evt);
 int input_event_available(input_event_buffer_t *buf);
 void input_event_buffer_init(input_event_buffer_t *buf);
+int input_read_event(input_event_t *evt);
 
 /* Keyboard specific */
 typedef struct {
