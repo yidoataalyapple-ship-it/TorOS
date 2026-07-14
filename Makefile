@@ -4,7 +4,7 @@
 # Full Desktop OS with GUI, Networking, Audio, Security
 #
 
-CROSS   = aarch64-linux-gnu
+CROSS   = aarch64-linux
 CC      = $(CROSS)-gcc
 LD      = $(CROSS)-ld
 OBJCOPY = $(CROSS)-objcopy
@@ -32,6 +32,7 @@ C_SRCS  = $(KERNEL)/kernel_main.c \
           $(KERNEL)/sched.c \
           $(KERNEL)/syscall.c \
           $(KERNEL)/shell.c \
+          $(KERNEL)/shell_gui.c \
           $(KERNEL)/fb.c \
           $(KERNEL)/rtc.c \
           $(KERNEL)/user.c \
@@ -51,6 +52,7 @@ C_SRCS += $(KERNEL)/fs.c \
 C_SRCS += $(KERNEL)/virtio_gpu.c \
           $(KERNEL)/gpu_buffer.c \
           $(KERNEL)/dmabuf.c \
+          $(KERNEL)/clip.c \
           $(KERNEL)/compositor.c \
           $(KERNEL)/window.c \
           $(KERNEL)/desktop.c \
@@ -58,6 +60,8 @@ C_SRCS += $(KERNEL)/virtio_gpu.c \
 
 # C kernel sources - UI Toolkit
 C_SRCS += $(KERNEL)/widget.c \
+          $(KERNEL)/widget_views.c \
+          $(KERNEL)/widget_tree.c \
           $(KERNEL)/font.c \
           $(KERNEL)/image.c
 
@@ -65,26 +69,32 @@ C_SRCS += $(KERNEL)/widget.c \
 C_SRCS += $(KERNEL)/audio.c
 
 # C kernel sources - Network
-C_SRCS += $(KERNEL)/network.c
+C_SRCS += $(KERNEL)/network.c \
+          $(KERNEL)/network_sock.c
 
 # C kernel sources - Security
 C_SRCS += $(KERNEL)/security.c
 
 # C kernel sources - Init & Debug
 C_SRCS += $(KERNEL)/init.c \
-          $(KERNEL)/debug.c
+          $(KERNEL)/debug.c \
+          $(KERNEL)/debug_log.c
 
 # C kernel sources - Applications
-C_SRCS += $(KERNEL)/app.c
+C_SRCS += $(KERNEL)/app.c \
+          $(KERNEL)/app_extra.c
 
 # C library sources
 C_SRCS += $(LIBC)/string.c
 
+# trap.c must become trap_c.o (trap.S already claims trap.o)
+C_SRCS_NO_TRAP = $(filter-out $(KERNEL)/trap.c,$(C_SRCS))
 OBJS = $(patsubst %.S,$(BUILD)/%.o,$(notdir $(ASM_SRCS))) \
-       $(patsubst %.c,$(BUILD)/%.o,$(notdir $(C_SRCS)))
+       $(patsubst %.c,$(BUILD)/%.o,$(notdir $(C_SRCS_NO_TRAP))) \
+       $(BUILD)/trap_c.o
 
-CFLAGS  = -Wall -Wextra -O2 -g -ffreestanding -nostdinc -nostdlib \
-          -mgeneral-regs-only -mcmodel=large -I$(INC) -DTOROS_VER=\"0.4.0\"
+CFLAGS  = -Wall -Wextra -O2 -g -ffreestanding -nostdinc -nostdlib -fno-stack-protector \
+          -mcmodel=large -fno-pic -fno-pie -I$(INC) -DTOROS_VER=\"0.4.0\"
 
 ASFLAGS = -g
 LDFLAGS = -T $(KERNEL)/linker.ld -nostdlib
