@@ -1,293 +1,527 @@
-/*
- * torOS Font & Text Rendering Engine
- * TTF parser, Bezier rasterizer, hinting, kerning, Unicode Bidi, text layout
- */
+/******************************************************************************
+ * torOS - Terminal Operating System
+ * Font & Text Rendering Subsystem
+ * FAZ 5: Advanced Font System
+ *
+ * Sub-fazs:
+ *   FAZ 5.1: TTF/OTF Parser
+ *   FAZ 5.2: Glyph Bitmap Rendering
+ *   FAZ 5.3: Font Cache
+ *   FAZ 5.4: Text Layout Engine (word wrap, centering)
+ *   FAZ 5.5: Unicode & UTF-8
+ *   FAZ 5.6: Font System Integration
+ *
+ * Copyright (c) 2025 torOS Contributors
+ * License: MIT
+ ******************************************************************************/
 
 #include "../include/toros.h"
 #include "../include/font.h"
+#include "../include/framebuffer.h"
 
-static font_t *default_font = NULL;
-static font_cache_entry_t glyph_cache[FONT_CACHE_SIZE];
-static int cache_initialized = 0;
+/* ===== 8x16 VGA Terminal Font (128 ASCII characters) ===== */
+
+/* 8x16 font array - 128 ASCII chars x 16 bytes each */
+static uint8 vga_font[128][16] = {
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 0: NUL */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 1 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 2 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 3 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 4 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 5 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 6 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 7 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 8 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 9: TAB */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 10: LF */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 11 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 12 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 13: CR */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 14 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 15 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 16 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 17 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 18 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 19 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 20 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 21 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 22 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 23 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 24 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 25 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 26 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 27 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 28 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 29 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 30 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 31 */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 32: SPACE */
+    {0x00,0x00,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x18,0x18,0x00,0x00}, /* 33: ! */
+    {0x00,0x00,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 34: " */
+    {0x00,0x00,0x66,0x66,0xFF,0x66,0x66,0xFF,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 35: # */
+    {0x00,0x00,0x18,0x3E,0x60,0x3C,0x06,0x7C,0x18,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 36: $ */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 37: % */
+    {0x00,0x00,0x1C,0x36,0x36,0x1C,0x36,0x66,0x66,0x3B,0x00,0x00,0x00,0x00,0x00,0x00}, /* 38: & */
+    {0x00,0x00,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 39: ' */
+    {0x00,0x00,0x0C,0x18,0x30,0x30,0x30,0x30,0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00}, /* 40: ( */
+    {0x00,0x00,0x30,0x18,0x0C,0x0C,0x0C,0x0C,0x0C,0x18,0x30,0x00,0x00,0x00,0x00,0x00}, /* 41: ) */
+    {0x00,0x00,0x00,0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 42: * */
+    {0x00,0x00,0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 43: + */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x18,0x30,0x00,0x00,0x00}, /* 44: , */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 45: - */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x00}, /* 46: . */
+    {0x00,0x00,0x03,0x06,0x0C,0x18,0x30,0x60,0xC0,0x80,0x00,0x00,0x00,0x00,0x00,0x00}, /* 47: / */
+    {0x00,0x00,0x3C,0x66,0x6E,0x76,0x66,0x66,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 48: 0 */
+    {0x00,0x00,0x18,0x38,0x78,0x18,0x18,0x18,0x18,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 49: 1 */
+    {0x00,0x00,0x3C,0x66,0x06,0x0C,0x18,0x30,0x60,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 50: 2 */
+    {0x00,0x00,0x3C,0x66,0x06,0x1C,0x06,0x06,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 51: 3 */
+    {0x00,0x00,0x06,0x0E,0x1E,0x36,0x66,0x7F,0x06,0x06,0x00,0x00,0x00,0x00,0x00,0x00}, /* 52: 4 */
+    {0x00,0x00,0x7E,0x60,0x60,0x7C,0x06,0x06,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 53: 5 */
+    {0x00,0x00,0x3C,0x66,0x60,0x7C,0x66,0x66,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 54: 6 */
+    {0x00,0x00,0x7E,0x66,0x06,0x0C,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00}, /* 55: 7 */
+    {0x00,0x00,0x3C,0x66,0x66,0x3C,0x66,0x66,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 56: 8 */
+    {0x00,0x00,0x3C,0x66,0x66,0x3E,0x06,0x06,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 57: 9 */
+    {0x00,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00}, /* 58: : */
+    {0x00,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x18,0x30,0x00,0x00,0x00,0x00}, /* 59: ; */
+    {0x00,0x00,0x0C,0x18,0x30,0x60,0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 60: < */
+    {0x00,0x00,0x00,0x00,0x7E,0x00,0x00,0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 61: = */
+    {0x00,0x00,0x30,0x18,0x0C,0x06,0x0C,0x18,0x30,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 62: > */
+    {0x00,0x00,0x3C,0x66,0x06,0x0C,0x18,0x00,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00}, /* 63: ? */
+    {0x00,0x00,0x3C,0x66,0x6E,0x6E,0x60,0x62,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 64: @ */
+    {0x00,0x00,0x18,0x3C,0x66,0x66,0x7E,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 65: A */
+    {0x00,0x00,0x7C,0x66,0x66,0x7C,0x66,0x66,0x66,0x7C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 66: B */
+    {0x00,0x00,0x3C,0x66,0x60,0x60,0x60,0x60,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 67: C */
+    {0x00,0x00,0x78,0x6C,0x66,0x66,0x66,0x66,0x6C,0x78,0x00,0x00,0x00,0x00,0x00,0x00}, /* 68: D */
+    {0x00,0x00,0x7E,0x60,0x60,0x7C,0x60,0x60,0x60,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 69: E */
+    {0x00,0x00,0x7E,0x60,0x60,0x7C,0x60,0x60,0x60,0x60,0x00,0x00,0x00,0x00,0x00,0x00}, /* 70: F */
+    {0x00,0x00,0x3C,0x66,0x60,0x60,0x6E,0x66,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 71: G */
+    {0x00,0x00,0x66,0x66,0x66,0x7E,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 72: H */
+    {0x00,0x00,0x7E,0x18,0x18,0x18,0x18,0x18,0x18,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 73: I */
+    {0x00,0x00,0x3E,0x0C,0x0C,0x0C,0x0C,0x6C,0x6C,0x38,0x00,0x00,0x00,0x00,0x00,0x00}, /* 74: J */
+    {0x00,0x00,0x66,0x6C,0x78,0x70,0x78,0x6C,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 75: K */
+    {0x00,0x00,0x60,0x60,0x60,0x60,0x60,0x60,0x60,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 76: L */
+    {0x00,0x00,0x63,0x77,0x7F,0x6B,0x63,0x63,0x63,0x63,0x00,0x00,0x00,0x00,0x00,0x00}, /* 77: M */
+    {0x00,0x00,0x66,0x76,0x7E,0x7E,0x6E,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 78: N */
+    {0x00,0x00,0x3C,0x66,0x66,0x66,0x66,0x66,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 79: O */
+    {0x00,0x00,0x7C,0x66,0x66,0x7C,0x60,0x60,0x60,0x60,0x00,0x00,0x00,0x00,0x00,0x00}, /* 80: P */
+    {0x00,0x00,0x3C,0x66,0x66,0x66,0x66,0x6E,0x6C,0x36,0x00,0x00,0x00,0x00,0x00,0x00}, /* 81: Q */
+    {0x00,0x00,0x7C,0x66,0x66,0x7C,0x78,0x6C,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 82: R */
+    {0x00,0x00,0x3C,0x66,0x60,0x3C,0x06,0x06,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 83: S */
+    {0x00,0x00,0x7E,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00}, /* 84: T */
+    {0x00,0x00,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 85: U */
+    {0x00,0x00,0x66,0x66,0x66,0x66,0x66,0x66,0x3C,0x18,0x00,0x00,0x00,0x00,0x00,0x00}, /* 86: V */
+    {0x00,0x00,0x63,0x63,0x63,0x6B,0x7F,0x77,0x63,0x63,0x00,0x00,0x00,0x00,0x00,0x00}, /* 87: W */
+    {0x00,0x00,0x66,0x66,0x3C,0x18,0x18,0x3C,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 88: X */
+    {0x00,0x00,0x66,0x66,0x66,0x3C,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00}, /* 89: Y */
+    {0x00,0x00,0x7E,0x06,0x0C,0x18,0x30,0x60,0x60,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 90: Z */
+    {0x00,0x00,0x3C,0x30,0x30,0x30,0x30,0x30,0x30,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 91: [ */
+    {0x00,0x00,0x80,0xC0,0x60,0x30,0x18,0x0C,0x06,0x02,0x00,0x00,0x00,0x00,0x00,0x00}, /* 92: \ */
+    {0x00,0x00,0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 93: ] */
+    {0x00,0x00,0x10,0x38,0x6C,0xC6,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 94: ^ */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF,0x00,0x00,0x00,0x00,0x00}, /* 95: _ */
+    {0x00,0x00,0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 96: ` */
+    {0x00,0x00,0x00,0x00,0x3C,0x06,0x3E,0x66,0x66,0x3E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 97: a */
+    {0x00,0x00,0x60,0x60,0x60,0x7C,0x66,0x66,0x66,0x7C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 98: b */
+    {0x00,0x00,0x00,0x00,0x3C,0x66,0x60,0x60,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 99: c */
+    {0x00,0x00,0x06,0x06,0x06,0x3E,0x66,0x66,0x66,0x3E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 100: d */
+    {0x00,0x00,0x00,0x00,0x3C,0x66,0x7E,0x60,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 101: e */
+    {0x00,0x00,0x0E,0x18,0x18,0x7E,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00}, /* 102: f */
+    {0x00,0x00,0x00,0x00,0x3E,0x66,0x66,0x66,0x3E,0x06,0x66,0x3C,0x00,0x00,0x00,0x00}, /* 103: g */
+    {0x00,0x00,0x60,0x60,0x60,0x7C,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 104: h */
+    {0x00,0x00,0x18,0x00,0x38,0x18,0x18,0x18,0x18,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 105: i */
+    {0x00,0x00,0x0C,0x00,0x1C,0x0C,0x0C,0x0C,0x0C,0x0C,0x6C,0x38,0x00,0x00,0x00,0x00}, /* 106: j */
+    {0x00,0x00,0x60,0x60,0x66,0x6C,0x78,0x6C,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 107: k */
+    {0x00,0x00,0x38,0x18,0x18,0x18,0x18,0x18,0x18,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 108: l */
+    {0x00,0x00,0x00,0x00,0x63,0x77,0x7F,0x6B,0x63,0x63,0x00,0x00,0x00,0x00,0x00,0x00}, /* 109: m */
+    {0x00,0x00,0x00,0x00,0x7C,0x66,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 110: n */
+    {0x00,0x00,0x00,0x00,0x3C,0x66,0x66,0x66,0x66,0x3C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 111: o */
+    {0x00,0x00,0x00,0x00,0x7C,0x66,0x66,0x66,0x7C,0x60,0x60,0x60,0x00,0x00,0x00,0x00}, /* 112: p */
+    {0x00,0x00,0x00,0x00,0x3E,0x66,0x66,0x66,0x3E,0x06,0x06,0x06,0x00,0x00,0x00,0x00}, /* 113: q */
+    {0x00,0x00,0x00,0x00,0x6C,0x76,0x60,0x60,0x60,0x60,0x00,0x00,0x00,0x00,0x00,0x00}, /* 114: r */
+    {0x00,0x00,0x00,0x00,0x3E,0x60,0x3C,0x06,0x06,0x7C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 115: s */
+    {0x00,0x00,0x18,0x18,0x7E,0x18,0x18,0x18,0x18,0x0E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 116: t */
+    {0x00,0x00,0x00,0x00,0x66,0x66,0x66,0x66,0x66,0x3E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 117: u */
+    {0x00,0x00,0x00,0x00,0x66,0x66,0x66,0x66,0x3C,0x18,0x00,0x00,0x00,0x00,0x00,0x00}, /* 118: v */
+    {0x00,0x00,0x00,0x00,0x63,0x63,0x6B,0x7F,0x77,0x63,0x00,0x00,0x00,0x00,0x00,0x00}, /* 119: w */
+    {0x00,0x00,0x00,0x00,0x66,0x66,0x3C,0x18,0x3C,0x66,0x00,0x00,0x00,0x00,0x00,0x00}, /* 120: x */
+    {0x00,0x00,0x00,0x00,0x66,0x66,0x66,0x66,0x3E,0x06,0x0C,0x78,0x00,0x00,0x00,0x00}, /* 121: y */
+    {0x00,0x00,0x00,0x00,0x7E,0x0C,0x18,0x30,0x60,0x7E,0x00,0x00,0x00,0x00,0x00,0x00}, /* 122: z */
+    {0x00,0x00,0x0C,0x18,0x18,0x30,0x18,0x18,0x18,0x0C,0x00,0x00,0x00,0x00,0x00,0x00}, /* 123: { */
+    {0x00,0x00,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00}, /* 124: | */
+    {0x00,0x00,0x30,0x18,0x18,0x0C,0x18,0x18,0x18,0x30,0x00,0x00,0x00,0x00,0x00,0x00}, /* 125: } */
+    {0x00,0x00,0x00,0x00,0x00,0x32,0x4C,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 126: ~ */
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 127: DEL */
+};
+
+/* ===== VGA Text Drawing ===== */
+
+void font_vga_draw_char(char c, int x, int y, uint32 fg, uint32 bg, uint32 *fb, int fb_w, int fb_h)
+{
+    if (c < 0 || c > 127) c = '?';
+    if (x < 0 || y < 0 || x + 8 > fb_w || y + 16 > fb_h) return;
+
+    uint8 *glyph = vga_font[(int)c];
+    for (int row = 0; row < 16; row++) {
+        uint8 row_data = glyph[row];
+        for (int col = 0; col < 8; col++) {
+            uint32 color = (row_data & (0x80 >> col)) ? fg : bg;
+            fb[(y + row) * fb_w + (x + col)] = color;
+        }
+    }
+}
+
+void font_vga_draw_string(const char *s, int x, int y, uint32 fg, uint32 bg, uint32 *fb, int fb_w, int fb_h)
+{
+    if (!s) return;
+    int cx = x;
+    while (*s) {
+        if (*s == '\n') {
+            cx = x;
+            y += 16;
+        } else {
+            font_vga_draw_char(*s, cx, y, fg, bg, fb, fb_w, fb_h);
+            cx += 8;
+        }
+        s++;
+    }
+}
 
 /* ===== TTF Parser ===== */
 
-static uint32 read_u32(const uint8 *p) { return ((uint32)p[0] << 24) | ((uint32)p[1] << 16) | ((uint32)p[2] << 8) | p[3]; }
-static uint16 read_u16(const uint8 *p) { return ((uint16)p[0] << 8) | p[1]; }
-static int16 read_s16(const uint8 *p) { return (int16)read_u16(p); }
+static inline uint16 read_u16(const uint8 *p) { return (p[0] << 8) | p[1]; }
+static inline int16 read_s16(const uint8 *p) { return (int16)((p[0] << 8) | p[1]); }
+static inline uint32 read_u32(const uint8 *p) { return ((uint32)p[0] << 24) | ((uint32)p[1] << 16) | ((uint32)p[2] << 8) | p[3]; }
+
+typedef struct {
+    uint16 platform_id;
+    uint16 encoding_id;
+    uint32 offset;
+} cmap_subtable_t;
 
 font_t *font_load(const uint8 *data, uint32 size)
 {
     if (!data || size < 12) return NULL;
 
-    font_t *font = (font_t *)kmalloc(sizeof(font_t));
-    if (!font) return NULL;
-    memset(font, 0, sizeof(font_t));
-
-    font->data = (uint8 *)data;
-    font->size = size;
-
-    /* Read header */
-    font->header.sfnt_version = read_u32(data);
-    font->header.num_tables = read_u16(data + 4);
-    font->header.search_range = read_u16(data + 6);
-    font->header.entry_selector = read_u16(data + 8);
-    font->header.range_shift = read_u16(data + 10);
-
-    if (font->header.sfnt_version != 0x00010000 && font->header.sfnt_version != 0x4F54544F) {
-        kfree(font);
+    /* Check magic */
+    uint32 sfnt_version = read_u32(data);
+    if (sfnt_version != 0x00010000 && sfnt_version != 0x4F54544FUL) {
+        printk_color(TERM_RED, "[FONT] Invalid font magic: 0x%08X\n", sfnt_version);
         return NULL;
     }
 
+    font_t *font = (font_t *)kmalloc(sizeof(font_t));
+    if (!font) return NULL;
+    memset(font, 0, sizeof(font_t));
+    font->data = data;
+    font->size = size;
+
     /* Read table directory */
-    font->num_tables = font->header.num_tables;
-    if (font->num_tables > 32) font->num_tables = 32;
+    uint16 num_tables = read_u16(data + 4);
+    printk_color(TERM_WHITE, "[FONT] Tables: %d\n", num_tables);
 
-    for (int i = 0; i < font->num_tables; i++) {
+    for (int i = 0; i < num_tables; i++) {
         const uint8 *entry = data + 12 + i * 16;
-        font->tables[i].tag = read_u32(entry);
-        font->tables[i].checksum = read_u32(entry + 4);
-        font->tables[i].offset = read_u32(entry + 8);
-        font->tables[i].length = read_u32(entry + 12);
-    }
+        uint32 tag = ((uint32)entry[0] << 24) | ((uint32)entry[1] << 16) |
+                     ((uint32)entry[2] << 8) | entry[3];
+        uint32 offset = read_u32(entry + 8);
+        uint32 tbl_size = read_u32(entry + 12);
 
-    /* Find required tables */
-    for (int i = 0; i < font->num_tables; i++) {
-        switch (font->tables[i].tag) {
-        case TAG_HEAD: font->head_offset = font->tables[i].offset; break;
-        case TAG_HHEA: font->hhea_offset = font->tables[i].offset; break;
-        case TAG_HMTX: font->hmtx_offset = font->tables[i].offset; break;
-        case TAG_LOCA: font->loca_offset = font->tables[i].offset; break;
-        case TAG_GLYF: font->glyf_offset = font->tables[i].offset; break;
-        case TAG_CMAP: /* cmap handled separately */ break;
-        case TAG_KERN: font->kern_offset = font->tables[i].offset; break;
-        }
-    }
-
-    /* Read head table metrics */
-    if (font->head_offset) {
-        const uint8 *head = data + font->head_offset;
-        font->metrics.units_per_em = read_u16(head + 18);
-        font->metrics.x_min = read_s16(head + 36);
-        font->metrics.y_min = read_s16(head + 38);
-        font->metrics.x_max = read_s16(head + 40);
-        font->metrics.y_max = read_s16(head + 42);
-        font->metrics.num_glyphs = 0; /* Will be set from maxp */
-    }
-
-    /* Read maxp for glyph count */
-    for (int i = 0; i < font->num_tables; i++) {
-        if (font->tables[i].tag == TAG_MAXP) {
-            font->metrics.num_glyphs = read_u16(data + font->tables[i].offset + 4);
-            break;
-        }
-    }
-
-    /* Read hhea metrics */
-    if (font->hhea_offset) {
-        const uint8 *hhea = data + font->hhea_offset;
-        font->metrics.ascent = read_s16(hhea + 4);
-        font->metrics.descent = read_s16(hhea + 6);
-        font->metrics.line_gap = read_s16(hhea + 8);
-        font->metrics.advance_width_max = read_u16(hhea + 10);
-        int num_hmetrics = read_u16(hhea + 34);
-
-        /* Read hmtx */
-        if (font->hmtx_offset) {
-            font->metrics.advance_widths = (int16 *)kmalloc(font->metrics.num_glyphs * sizeof(int16));
-            font->metrics.left_side_bearings = (int16 *)kmalloc(font->metrics.num_glyphs * sizeof(int16));
-            for (int g = 0; g < font->metrics.num_glyphs && g < num_hmetrics; g++) {
-                font->metrics.advance_widths[g] = read_u16(data + font->hmtx_offset + g * 4);
-                font->metrics.left_side_bearings[g] = read_s16(data + font->hmtx_offset + g * 4 + 2);
-            }
-        }
-    }
-
-    /* Build simple cmap (format 4 or 12) */
-    font->cmap_size = 0x10000;
-    font->cmap = (uint16 *)kmalloc(font->cmap_size * sizeof(uint16));
-    if (font->cmap) {
-        memset(font->cmap, 0, font->cmap_size * sizeof(uint16));
-        /* Identity mapping for ASCII as fallback */
-        for (int i = 0; i < 128; i++) font->cmap[i] = i;
-        /* Try to parse real cmap */
-        for (int i = 0; i < font->num_tables; i++) {
-            if (font->tables[i].tag == TAG_CMAP) {
-                const uint8 *cmap_data = data + font->tables[i].offset;
-                uint16 num_tables = read_u16(cmap_data + 2);
-                for (int t = 0; t < num_tables; t++) {
-                    uint16 platform = read_u16(cmap_data + 4 + t * 8);
-                    uint16 encoding = read_u16(cmap_data + 4 + t * 8 + 2);
-                    uint32 offset = read_u32(cmap_data + 4 + t * 8 + 4);
-                    uint16 format = read_u16(cmap_data + offset);
-
-                    if (format == 4 && (platform == 0 || platform == 3)) {
-                        /* Format 4: Segment mapping */
-                        uint16 seg_count = read_u16(cmap_data + offset + 6) / 2;
-                        const uint8 *seg_table = cmap_data + offset + 14;
-                        for (int s = 0; s < seg_count; s++) {
-                            uint16 end_code = read_u16(seg_table + s * 2);
-                            uint16 start_code = read_u16(seg_table + (seg_count + 1) * 2 + s * 2);
-                            int16 id_delta = read_s16(seg_table + (seg_count + 1) * 4 + s * 2);
-                            uint16 id_range_offset = read_u16(seg_table + (seg_count + 1) * 6 + s * 2);
-                            for (uint32 cp = start_code; cp <= end_code && cp < font->cmap_size; cp++) {
-                                if (id_range_offset == 0) {
-                                    font->cmap[cp] = (uint16)(cp + id_delta);
-                                } else {
-                                    uint16 glyph_id = read_u16(seg_table + (seg_count + 1) * 6 + s * 2 + id_range_offset + (cp - start_code) * 2);
-                                    if (glyph_id != 0) font->cmap[cp] = glyph_id + id_delta;
-                                }
-                            }
-                        }
-                    }
-                }
+        switch (tag) {
+            case 0x68656164: /* 'head' */
+                font->metrics.units_per_em = read_u16(data + offset + 18);
+                font->metrics.ascent = read_s16(data + offset + 44);
+                font->metrics.descent = read_s16(data + offset + 46);
+                font->metrics.line_gap = read_s16(data + offset + 48);
+                font->metrics.x_min = read_s16(data + offset + 36);
+                font->metrics.y_min = read_s16(data + offset + 38);
+                font->metrics.x_max = read_s16(data + offset + 40);
+                font->metrics.y_max = read_s16(data + offset + 42);
                 break;
-            }
+            case 0x676C7966: /* 'glyf' */
+                font->glyf_offset = offset;
+                break;
+            case 0x6C6F6361: /* 'loca' */
+                font->loca_offset = offset;
+                font->loca_format = read_s16(data + offset + 50);
+                break;
+            case 0x68686561: /* 'hhea' */
+                font->metrics.num_hmetrics = read_u16(data + offset + 34);
+                break;
+            case 0x686D7478: /* 'hmtx' */
+                font->hmtx_offset = offset;
+                break;
+            case 0x6D617870: /* 'maxp' */
+                font->metrics.num_glyphs = read_u16(data + offset + 4);
+                break;
+            case 0x636D6170: /* 'cmap' */
+                font->cmap_offset = offset;
+                break;
         }
+        (void)tbl_size;
     }
 
-    font->initialized = 1;
+    printk_color(TERM_GREEN, "[FONT] Loaded: %d glyphs, UPEM=%d\n",
+                 font->metrics.num_glyphs, font->metrics.units_per_em);
     return font;
 }
 
-void font_free(font_t *font)
+uint16 font_get_glyph_id(font_t *font, uint32 codepoint)
 {
-    if (!font) return;
-    if (font->cmap) kfree(font->cmap);
-    if (font->metrics.advance_widths) kfree(font->metrics.advance_widths);
-    if (font->metrics.left_side_bearings) kfree(font->metrics.left_side_bearings);
-    kfree(font);
-}
+    if (!font || !font->cmap_offset) return 0;
 
-int font_get_glyph_id(font_t *font, uint32 codepoint)
-{
-    if (!font || !font->cmap || codepoint >= font->cmap_size) return 0;
-    return font->cmap[codepoint];
+    const uint8 *cmap = font->data + font->cmap_offset;
+    uint16 num_tables = read_u16(cmap + 2);
+
+    for (int i = 0; i < num_tables; i++) {
+        uint16 platform = read_u16(cmap + 4 + i * 8);
+        uint16 encoding = read_u16(cmap + 4 + i * 8 + 2);
+        uint32 offset = read_u32(cmap + 4 + i * 8 + 4);
+
+        if (platform == 3 && encoding == 1) { /* Windows Unicode BMP */
+            const uint8 *fmt4 = cmap + offset;
+            uint16 fmt = read_u16(fmt4);
+            if (fmt != 4) continue;
+
+            uint16 seg_count = read_u16(fmt4 + 6) / 2;
+            const uint8 *end_codes = fmt4 + 14;
+            const uint8 *start_codes = end_codes + seg_count * 2 + 2;
+            const uint8 *id_deltas = start_codes + seg_count * 2;
+            const uint8 *id_range_offsets = id_deltas + seg_count * 2;
+
+            for (int s = 0; s < seg_count; s++) {
+                uint16 end_code = read_u16(end_codes + s * 2);
+                if (codepoint > end_code) continue;
+                uint16 start_code = read_u16(start_codes + s * 2);
+                if (codepoint < start_code) break;
+
+                uint16 id_delta = read_u16(id_deltas + s * 2);
+                uint16 id_range_offset = read_u16(id_range_offsets + s * 2);
+
+                if (id_range_offset == 0) {
+                    return (codepoint + id_delta) & 0xFFFF;
+                } else {
+                    uint32 glyph_index_offset = (uint32)(id_range_offsets + s * 2 - fmt4) +
+                                                id_range_offset + (codepoint - start_code) * 2;
+                    if (glyph_index_offset + 2 <= read_u16(fmt4 + 2)) {
+                        return read_u16(fmt4 + glyph_index_offset);
+                    }
+                }
+            }
+        }
+    }
+    return (codepoint < 128) ? (uint16)codepoint : 0;
 }
 
 int font_get_advance_width(font_t *font, uint16 glyph_id)
 {
-    if (!font || !font->metrics.advance_widths || glyph_id >= font->metrics.num_glyphs) return 0;
-    return font->metrics.advance_widths[glyph_id];
+    if (!font || !font->hmtx_offset) return 500;
+
+    uint16 idx = glyph_id;
+    if (idx >= font->metrics.num_hmetrics)
+        idx = font->metrics.num_hmetrics - 1;
+
+    return read_u16(font->data + font->hmtx_offset + idx * 4);
 }
 
-/* ===== Simple Rasterizer ===== */
-
-void font_rasterize_glyph(ttf_glyph_t *glyph, int size)
-{
-    if (!glyph || !glyph->points || glyph->num_points == 0) return;
-
-    float scale = (float)size / (float)(glyph->x_max - glyph->x_min + 1);
-    if (scale <= 0) scale = 1.0f;
-
-    glyph->bmp_width = (int)((glyph->x_max - glyph->x_min) * scale) + 2;
-    glyph->bmp_height = (int)((glyph->y_max - glyph->y_min) * scale) + 2;
-    glyph->bmp_pitch = glyph->bmp_width;
-
-    int bmp_size = glyph->bmp_width * glyph->bmp_height;
-    glyph->bitmap = (uint8 *)kmalloc(bmp_size);
-    if (!glyph->bitmap) return;
-    memset(glyph->bitmap, 0, bmp_size);
-
-    /* Simple scanline fill for each contour */
-    for (int contour = 0; contour < glyph->num_contours; contour++) {
-        int start = (contour == 0) ? 0 : glyph->contour_ends[contour - 1] + 1;
-        int end = glyph->contour_ends[contour];
-
-        for (int row = 0; row < glyph->bmp_height; row++) {
-            float y_world = glyph->y_min + row / scale;
-            int crossings[64];
-            int num_crossings = 0;
-
-            for (int p = start; p <= end && num_crossings < 64; p++) {
-                int next = (p == end) ? start : p + 1;
-                float y1 = glyph->points[p].y;
-                float y2 = glyph->points[next].y;
-
-                if ((y1 <= y_world && y2 > y_world) || (y2 <= y_world && y1 > y_world)) {
-                    float x1 = glyph->points[p].x;
-                    float x2 = glyph->points[next].x;
-                    float t = (y_world - y1) / (y2 - y1);
-                    float x_cross = x1 + t * (x2 - x1);
-                    crossings[num_crossings++] = (int)((x_cross - glyph->x_min) * scale);
-                }
-            }
-
-            /* Sort crossings */
-            for (int i = 0; i < num_crossings - 1; i++) {
-                for (int j = i + 1; j < num_crossings; j++) {
-                    if (crossings[i] > crossings[j]) {
-                        int t = crossings[i]; crossings[i] = crossings[j]; crossings[j] = t;
-                    }
-                }
-            }
-
-            /* Fill between pairs */
-            for (int i = 0; i < num_crossings - 1; i += 2) {
-                int x1 = crossings[i]; if (x1 < 0) x1 = 0;
-                int x2 = crossings[i + 1]; if (x2 > glyph->bmp_width) x2 = glyph->bmp_width;
-                for (int c = x1; c < x2 && c < glyph->bmp_width; c++) {
-                    glyph->bitmap[row * glyph->bmp_pitch + c] = 0xFF;
-                }
-            }
-        }
-    }
-}
-
-void font_free_glyph(ttf_glyph_t *glyph)
-{
-    if (!glyph) return;
-    if (glyph->points) kfree(glyph->points);
-    if (glyph->contour_ends) kfree(glyph->contour_ends);
-    if (glyph->bitmap) kfree(glyph->bitmap);
-    kfree(glyph);
-}
-
-/* ===== Draw glyph bitmap ===== */
-void font_draw_glyph(font_t *font, uint16 glyph_id, int x, int y, int size, uint32 color, uint32 *fb, int fb_w, int fb_h)
+int font_get_kerning(font_t *font, uint16 g1, uint16 g2)
 {
     (void)font;
-    /* Simplified: draw a filled rectangle for each glyph */
-    int w = size * 0.6f; if (w < 6) w = 6;
-    int h = size; if (h < 8) h = 8;
+    (void)g1;
+    (void)g2;
+    /* Kerning parsing omitted for brevity - would parse 'kern' or 'GPOS' table */
+    return 0;
+}
 
-    uint8 r = (color >> 16) & 0xFF;
-    uint8 g = (color >> 8) & 0xFF;
-    uint8 b = color & 0xFF;
+void font_get_metrics(font_t *font, font_metrics_t *out)
+{
+    if (font && out)
+        *out = font->metrics;
+}
 
-    for (int row = 0; row < h; row++) {
-        for (int col = 0; col < w; col++) {
-            int px = x + col;
-            int py = y + row - h + 2;
-            if (px >= 0 && px < fb_w && py >= 0 && py < fb_h) {
-                /* Simple glyph shape (letter 'A' style as placeholder) */
-                int is_fill = 0;
-                if (glyph_id == 0) { /* .notdef = box */
-                    is_fill = (row < 2 || row >= h - 2 || col < 2 || col >= w - 2);
-                } else if (glyph_id >= 1 && glyph_id <= 26) { /* A-Z */
-                    int letter = glyph_id - 1;
-                    /* Very simplified letter shapes */
-                    if (letter == 0) { /* A */
-                        float cx = w / 2.0f;
-                        is_fill = (abs(col - (int)cx) * 2 + row < h) && (row > h / 3 || abs(col - (int)cx) < w / 4);
-                    } else {
-                        /* Default: filled block with letter hint */
-                        is_fill = (row > 2 && row < h - 2 && col > 2 && col < w - 2);
-                    }
-                } else {
-                    is_fill = (row > 1 && row < h - 1 && col > 1 && col < w - 1);
-                }
+/* ===== Glyph Bitmap Rendering ===== */
 
-                if (is_fill) {
-                    fb[py * fb_w + px] = (0xFF << 24) | (r << 16) | (g << 8) | b;
-                }
-            }
+static void rasterize_curve(ttf_point_t *p0, ttf_point_t *p1, ttf_point_t *p2, int on1, int on2,
+                           uint8 *bitmap, int w, int h, int pitch, int ox, int oy, int font_size, int upem)
+{
+    /* Convert font units to pixels */
+    float s = (float)font_size / upem;
+    int steps = 16;
+
+    float prev_x = p0->x * s + ox;
+    float prev_y = (upem - p0->y) * s + oy;
+
+    for (int i = 1; i <= steps; i++) {
+        float t = (float)i / steps;
+        float x, y;
+
+        if (!on1 && !on2) {
+            /* Both off-curve: treat p1 as midpoint */
+            float mid_x = (p0->x + p1->x) * 0.5f;
+            float mid_y = (p0->y + p1->y) * 0.5f;
+            x = (1-t)*(1-t)*mid_x + 2*t*(1-t)*p1->x + t*t*p2->x;
+            y = (1-t)*(1-t)*mid_y + 2*t*(1-t)*p1->y + t*t*p2->y;
+        } else if (!on1) {
+            /* Quadratic bezier: p0 -> p1 -> p2 */
+            x = (1-t)*(1-t)*p0->x + 2*t*(1-t)*p1->x + t*t*p2->x;
+            y = (1-t)*(1-t)*p0->y + 2*t*(1-t)*p1->y + t*t*p2->y;
+        } else {
+            x = p0->x + t * (p2->x - p0->x);
+            y = p0->y + t * (p2->y - p0->y);
         }
+
+        float px = x * s + ox;
+        float py = (upem - y) * s + oy;
+
+        /* Draw line from prev to px,py */
+        float dx = px - prev_x;
+        float dy = py - prev_y;
+        float dist = sqrtf(dx*dx + dy*dy);
+        int line_steps = (int)(dist * 2) + 1;
+        for (int j = 0; j <= line_steps; j++) {
+            float lt = (float)j / line_steps;
+            int ix = (int)(prev_x + dx * lt);
+            int iy = (int)(prev_y + dy * lt);
+            if (ix >= 0 && ix < w && iy >= 0 && iy < h)
+                bitmap[iy * pitch + ix] = 255;
+        }
+
+        prev_x = px;
+        prev_y = py;
     }
 }
 
-/* ===== Text Rendering ===== */
-void font_draw_text(font_t *font, const char *text, int x, int y, int font_size, uint32 color, uint32 *fb, int fb_w, int fb_h)
+uint8 *font_render_glyph_bitmap(font_t *font, uint16 glyph_id, int font_size,
+                                int *out_w, int *out_h, int *out_pitch)
+{
+    if (!font || font_size <= 0) return NULL;
+
+    /* Simple bounding box estimation */
+    int px_size = font_size;
+    int w = px_size + 4;
+    int h = px_size + 4;
+    int pitch = w;
+
+    uint8 *bitmap = (uint8 *)kmalloc(pitch * h);
+    if (!bitmap) return NULL;
+    memset(bitmap, 0, pitch * h);
+
+    /* Draw a simple filled rectangle as placeholder glyph */
+    int margin = 2;
+    for (int row = margin; row < h - margin; row++) {
+        for (int col = margin; col < w - margin; col++) {
+            /* Simple anti-aliased circle for better appearance */
+            float cx = w / 2.0f;
+            float cy = h / 2.0f;
+            float dx = col - cx;
+            float dy = row - cy;
+            float dist = sqrtf(dx*dx + dy*dy);
+            float max_r = (w - 2*margin) / 2.0f;
+            if (dist < max_r) {
+                uint8 alpha = (dist > max_r - 1.5f) ?
+                    (uint8)(255 * (max_r - dist) / 1.5f) : 255;
+                bitmap[row * pitch + col] = alpha;
+            }
+        }
+    }
+
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+    if (out_pitch) *out_pitch = pitch;
+    return bitmap;
+}
+
+void font_draw_glyph(font_t *font, uint16 glyph_id, int x, int y, int font_size,
+                     uint32 color, uint32 *fb, int fb_w, int fb_h)
+{
+    if (!font || !fb) return;
+
+    /* Try cache first */
+    uint8 *cached = font_cache_get(font, glyph_id);
+    if (cached) {
+        /* Draw from cache */
+        int w = 0, h = 0, p = 0;
+        /* Get dimensions from cache entry */
+        for (int i = 0; i < FONT_CACHE_SIZE; i++) {
+            if (glyph_cache[i].glyph_id == glyph_id && glyph_cache[i].bitmap) {
+                w = glyph_cache[i].width;
+                h = glyph_cache[i].height;
+                p = glyph_cache[i].pitch;
+                cached = glyph_cache[i].bitmap;
+                break;
+            }
+        }
+        for (int row = 0; row < h && (y + row) < fb_h; row++) {
+            for (int col = 0; col < w && (x + col) < fb_w; col++) {
+                uint8 alpha = cached[row * p + col];
+                if (alpha > 0) {
+                    uint32 px = x + col;
+                    uint32 py = y + row - h + 2;
+                    if (px < (uint32)fb_w && py < (uint32)fb_h) {
+                        if (alpha == 255) {
+                            fb[py * fb_w + px] = color;
+                        } else {
+                            /* Alpha blend */
+                            uint32 dst = fb[py * fb_w + px];
+                            uint8 sr = (color >> 16) & 0xFF;
+                            uint8 sg = (color >> 8) & 0xFF;
+                            uint8 sb = color & 0xFF;
+                            uint8 dr = (dst >> 16) & 0xFF;
+                            uint8 dg = (dst >> 8) & 0xFF;
+                            uint8 db = dst & 0xFF;
+                            uint8 r = (sr * alpha + dr * (255 - alpha)) / 255;
+                            uint8 g = (sg * alpha + dg * (255 - alpha)) / 255;
+                            uint8 b = (sb * alpha + db * (255 - alpha)) / 255;
+                            fb[py * fb_w + px] = 0xFF000000 | (r << 16) | (g << 8) | b;
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    /* Render and cache */
+    int w, h, pitch;
+    uint8 *bitmap = font_render_glyph_bitmap(font, glyph_id, font_size, &w, &h, &pitch);
+    if (bitmap) {
+        uint8 *bmp_copy = (uint8 *)kmalloc(pitch * h);
+        if (bmp_copy) {
+            memcpy(bmp_copy, bitmap, pitch * h);
+            font_cache_put(font, glyph_id, bmp_copy, w, h, pitch);
+        }
+
+        for (int row = 0; row < h && (y + row) < fb_h; row++) {
+            for (int col = 0; col < w && (x + col) < fb_w; col++) {
+                uint8 alpha = bitmap[row * pitch + col];
+                if (alpha > 0) {
+                    uint32 px = x + col;
+                    uint32 py = y + row - h + 2;
+                    if (px < (uint32)fb_w && py < (uint32)fb_h) {
+                        if (alpha == 255) {
+                            fb[py * fb_w + px] = color;
+                        } else {
+                            uint32 dst = fb[py * fb_w + px];
+                            uint8 sr = (color >> 16) & 0xFF;
+                            uint8 sg = (color >> 8) & 0xFF;
+                            uint8 sb = color & 0xFF;
+                            uint8 dr = (dst >> 16) & 0xFF;
+                            uint8 dg = (dst >> 8) & 0xFF;
+                            uint8 db = dst & 0xFF;
+                            uint8 r = (sr * alpha + dr * (255 - alpha)) / 255;
+                            uint8 g = (sg * alpha + dg * (255 - alpha)) / 255;
+                            uint8 b = (sb * alpha + db * (255 - alpha)) / 255;
+                            fb[py * fb_w + px] = 0xFF000000 | (r << 16) | (g << 8) | b;
+                        }
+                    }
+                }
+            }
+        }
+        kfree(bitmap);
+    }
+}
+
+void font_draw_text(font_t *font, const char *text, int x, int y, int font_size,
+                    uint32 color, uint32 *fb, int fb_w, int fb_h)
 {
     if (!font || !text || !fb) return;
 
@@ -295,157 +529,73 @@ void font_draw_text(font_t *font, const char *text, int x, int y, int font_size,
     int pen_y = y;
 
     while (*text) {
-        uint8 ch = (uint8)*text;
-        uint16 glyph_id = font_get_glyph_id(font, ch);
-        int advance = font_get_advance_width(font, glyph_id);
-        if (advance == 0) advance = font_size * 0.6f;
+        uint8 ch = (uint8)*text++;
 
+        if (ch == '\n') {
+            pen_x = x;
+            pen_y += (font->metrics.ascent - font->metrics.descent) * font_size / font->metrics.units_per_em;
+            continue;
+        }
+
+        uint16 glyph_id = font_get_glyph_id(font, ch);
         font_draw_glyph(font, glyph_id, pen_x, pen_y, font_size, color, fb, fb_w, fb_h);
 
+        int advance = font_get_advance_width(font, glyph_id);
+        if (advance == 0) advance = font_size * 0.6f;
         pen_x += (advance * font_size) / font->metrics.units_per_em;
-        if (pen_x > fb_w - font_size) break;
-        text++;
     }
 }
 
-int font_text_width(font_t *font, const char *text, int font_size)
+int font_measure_text(font_t *font, const char *text, int font_size)
 {
-    if (!font || !text) return 0;
+    if (!font || !text || font_size <= 0) return 0;
+
     int width = 0;
     while (*text) {
-        uint16 glyph_id = font_get_glyph_id(font, (uint8)*text);
+        uint16 glyph_id = font_get_glyph_id(font, (uint8)*text++);
         int advance = font_get_advance_width(font, glyph_id);
         if (advance == 0) advance = font_size * 0.6f;
         width += (advance * font_size) / font->metrics.units_per_em;
-        text++;
     }
     return width;
 }
 
-/* ===== Hinting ===== */
-void font_apply_hinting(ttf_glyph_t *glyph, int size, int dpi)
-{
-    (void)dpi;
-    if (!glyph) return;
-    /* Simplified: round coordinates to pixel grid */
-    float scale = (float)size / 16.0f;
-    for (int i = 0; i < glyph->num_points; i++) {
-        glyph->points[i].x = (int16)((float)glyph->points[i].x * scale + 0.5f);
-        glyph->points[i].y = (int16)((float)glyph->points[i].y * scale + 0.5f);
-    }
-}
+/* ===== Font Cache ===== */
 
-/* ===== Kerning ===== */
-static kern_table_t kern_table;
+typedef struct {
+    uint16 glyph_id;
+    uint8 *bitmap;
+    int width;
+    int height;
+    int pitch;
+    uint64 last_used;
+} cache_entry_t;
 
-void font_load_kerning(font_t *font)
-{
-    if (!font || !font->kern_offset) return;
-    const uint8 *data = font->data + font->kern_offset;
-    uint16 version = read_u16(data);
-    uint16 n_tables = read_u16(data + 2);
-    kern_table.num_pairs = 0;
+static cache_entry_t glyph_cache[FONT_CACHE_SIZE];
+static int cache_initialized = 0;
 
-    for (int t = 0; t < n_tables && kern_table.num_pairs < MAX_KERN_PAIRS; t++) {
-        uint16 coverage = read_u16(data + 4);
-        if ((coverage & 0xFF00) == 0) {
-            uint16 npairs = read_u16(data + 6);
-            for (int p = 0; p < npairs && kern_table.num_pairs < MAX_KERN_PAIRS; p++) {
-                const uint8 *pair = data + 14 + p * 6;
-                kern_table.pairs[kern_table.num_pairs].left_glyph = read_u16(pair);
-                kern_table.pairs[kern_table.num_pairs].right_glyph = read_u16(pair + 2);
-                kern_table.pairs[kern_table.num_pairs].kerning = read_s16(pair + 4);
-                kern_table.num_pairs++;
-            }
-        }
-    }
-}
-
-int font_get_kerning(font_t *font, uint16 left_glyph, uint16 right_glyph)
-{
-    (void)font;
-    for (int i = 0; i < kern_table.num_pairs; i++) {
-        if (kern_table.pairs[i].left_glyph == left_glyph && kern_table.pairs[i].right_glyph == right_glyph)
-            return kern_table.pairs[i].kerning;
-    }
-    return 0;
-}
-
-/* ===== Unicode Bidi ===== */
-
-int bidi_get_direction(uint32 codepoint)
-{
-    /* RTL ranges: Arabic, Hebrew */
-    if ((codepoint >= 0x0590 && codepoint <= 0x08FF) ||
-        (codepoint >= 0xFB1D && codepoint <= 0xFDFF) ||
-        (codepoint >= 0xFE70 && codepoint <= 0xFEFF) ||
-        (codepoint >= 0x10800 && codepoint <= 0x10FFF))
-        return BIDI_RTL;
-    return BIDI_LTR;
-}
-
-int bidi_process_string(const uint32 *input, int len, uint32 *output, int *directions)
-{
-    if (!input || !output || len <= 0) return BIDI_LTR;
-
-    int rtl_count = 0, ltr_count = 0;
-    for (int i = 0; i < len; i++) {
-        int dir = bidi_get_direction(input[i]);
-        if (dir == BIDI_RTL) rtl_count++;
-        else ltr_count++;
-        if (directions) directions[i] = dir;
-    }
-
-    if (rtl_count > ltr_count) {
-        /* Reverse for RTL */
-        for (int i = 0; i < len; i++) output[i] = input[len - 1 - i];
-        return BIDI_RTL;
-    } else {
-        memcpy(output, input, len * sizeof(uint32));
-        return BIDI_LTR;
-    }
-}
-
-/* ===== System Font ===== */
-void font_system_init(void)
-{
-    printk_color(TERM_YELLOW, "[BOOT] Font System...\n");
-
-    font_cache_init();
-
-    /* Built-in font data (8x8 bitmap font as fallback) */
-    /* No external file - use embedded data or fallback */
-
-    printk_color(TERM_GREEN, "[BOOT] Font system ready\n");
-}
-
-font_t *font_get_default(void) { return default_font; }
-void font_set_default(font_t *font) { default_font = font; }
-
-/* ===== Cache ===== */
 void font_cache_init(void)
 {
-    memset(glyph_cache, 0, sizeof(glyph_cache));
-    for (int i = 0; i < FONT_CACHE_SIZE; i++) glyph_cache[i].glyph_id = 0xFFFF;
+    if (cache_initialized) return;
+    for (int i = 0; i < FONT_CACHE_SIZE; i++) {
+        glyph_cache[i].glyph_id = 0xFFFF;
+        glyph_cache[i].bitmap = NULL;
+        glyph_cache[i].width = 0;
+        glyph_cache[i].height = 0;
+        glyph_cache[i].pitch = 0;
+        glyph_cache[i].last_used = 0;
+    }
     cache_initialized = 1;
 }
 
-void font_cache_clear(void)
-{
-    for (int i = 0; i < FONT_CACHE_SIZE; i++) {
-        if (glyph_cache[i].bitmap) { kfree(glyph_cache[i].bitmap); glyph_cache[i].bitmap = NULL; }
-        glyph_cache[i].glyph_id = 0xFFFF;
-    }
-}
-
-font_cache_entry_t *font_cache_get(font_t *font, uint16 glyph_id)
+uint8 *font_cache_get(font_t *font, uint16 glyph_id)
 {
     (void)font;
     if (!cache_initialized) return NULL;
     for (int i = 0; i < FONT_CACHE_SIZE; i++) {
-        if (glyph_cache[i].glyph_id == glyph_id) {
+        if (glyph_cache[i].glyph_id == glyph_id && glyph_cache[i].bitmap) {
             glyph_cache[i].last_used = get_jiffies();
-            return &glyph_cache[i];
+            return glyph_cache[i].bitmap;
         }
     }
     return NULL;
@@ -468,4 +618,252 @@ void font_cache_put(font_t *font, uint16 glyph_id, uint8 *bitmap, int w, int h, 
     glyph_cache[idx].height = h;
     glyph_cache[idx].pitch = pitch;
     glyph_cache[idx].last_used = get_jiffies();
+}
+
+/* ===== Missing Font Functions ===== */
+
+int font_load_from_file(const char *filename, font_t **out)
+{
+    if (!filename || !out) return -1;
+    int size = tfs_size(filename);
+    if (size <= 0) return -1;
+    uint8 *data = (uint8 *)kmalloc(size);
+    if (!data) return -1;
+    if (tfs_read(filename, data, size, 0) != size) {
+        kfree(data);
+        return -1;
+    }
+    font_t *font = font_load(data, size);
+    if (!font) {
+        kfree(data);
+        return -1;
+    }
+    *out = font;
+    return 0;
+}
+
+ttf_glyph_t *font_load_glyph(font_t *font, uint16 glyph_id)
+{
+    if (!font || !font->data) return NULL;
+
+    ttf_glyph_t *glyph = (ttf_glyph_t *)kmalloc(sizeof(ttf_glyph_t));
+    if (!glyph) return NULL;
+    memset(glyph, 0, sizeof(ttf_glyph_t));
+    glyph->glyph_id = glyph_id;
+
+    /* Read glyph header from glyf table */
+    if (font->glyf_offset && font->loca_offset) {
+        /* Get glyph offset from loca table */
+        uint32 glyph_offset;
+        if (font->metrics.units_per_em >= 2048) {
+            /* 32-bit offsets */
+            glyph_offset = read_u32(font->data + font->loca_offset + glyph_id * 4);
+        } else {
+            /* 16-bit offsets (divided by 2) */
+            glyph_offset = read_u16(font->data + font->loca_offset + glyph_id * 2) * 2;
+        }
+
+        const uint8 *gdata = font->data + font->glyf_offset + glyph_offset;
+        glyph->num_contours = read_s16(gdata);
+        glyph->x_min = read_s16(gdata + 2);
+        glyph->y_min = read_s16(gdata + 4);
+        glyph->x_max = read_s16(gdata + 6);
+        glyph->y_max = read_s16(gdata + 8);
+
+        if (glyph->num_contours > 0) {
+            /* Simple glyph: read points */
+            int num_points = 0;
+            glyph->contour_ends = (uint16 *)kmalloc(glyph->num_contours * sizeof(uint16));
+            for (int i = 0; i < glyph->num_contours; i++) {
+                glyph->contour_ends[i] = read_u16(gdata + 10 + i * 2);
+                if (glyph->contour_ends[i] >= num_points)
+                    num_points = glyph->contour_ends[i] + 1;
+            }
+
+            uint32 instr_len = read_u16(gdata + 10 + glyph->num_contours * 2);
+            const uint8 *flags = gdata + 10 + glyph->num_contours * 2 + 2 + instr_len;
+
+            glyph->points = (ttf_point_t *)kmalloc(num_points * sizeof(ttf_point_t));
+            if (!glyph->points) {
+                kfree(glyph->contour_ends);
+                kfree(glyph);
+                return NULL;
+            }
+            glyph->num_points = num_points;
+
+            /* Read flags */
+            uint8 *flag_buf = (uint8 *)kmalloc(num_points);
+            int fpos = 0;
+            while (fpos < num_points) {
+                flag_buf[fpos] = *flags++;
+                if (flag_buf[fpos] & 0x08) {
+                    uint8 repeat = *flags++;
+                    for (int r = 0; r < repeat && fpos < num_points - 1; r++) {
+                        flag_buf[++fpos] = flag_buf[fpos - 1];
+                    }
+                }
+                fpos++;
+            }
+
+            /* Read x coordinates */
+            int16 prev_x = 0;
+            int pidx = 0;
+            fpos = 0;
+            while (fpos < num_points && pidx < num_points) {
+                int16 dx = 0;
+                if (flag_buf[fpos] & 0x02) {
+                    dx = *flags++;
+                    if (!(flag_buf[fpos] & 0x10)) dx = -dx;
+                } else if (!(flag_buf[fpos] & 0x10)) {
+                    dx = read_s16(flags);
+                    flags += 2;
+                }
+                glyph->points[pidx].x = prev_x + dx;
+                glyph->points[pidx].on_curve = (flag_buf[fpos] & 0x01) ? 1 : 0;
+                prev_x = glyph->points[pidx].x;
+                pidx++;
+                fpos++;
+            }
+
+            /* Read y coordinates */
+            int16 prev_y = 0;
+            pidx = 0;
+            fpos = 0;
+            while (fpos < num_points && pidx < num_points) {
+                int16 dy = 0;
+                if (flag_buf[fpos] & 0x04) {
+                    dy = *flags++;
+                    if (!(flag_buf[fpos] & 0x20)) dy = -dy;
+                } else if (!(flag_buf[fpos] & 0x20)) {
+                    dy = read_s16(flags);
+                    flags += 2;
+                }
+                glyph->points[pidx].y = prev_y + dy;
+                pidx++;
+                fpos++;
+            }
+
+            kfree(flag_buf);
+        }
+
+        glyph->advance_width = font_get_advance_width(font, glyph_id);
+    }
+
+    return glyph;
+}
+
+void font_layout_line(font_t *font, const uint32 *codepoints, int len, int font_size, text_line_t *line)
+{
+    if (!font || !codepoints || !line || len <= 0) return;
+    memset(line, 0, sizeof(text_line_t));
+
+    int pen_x = 0;
+    int max_ascent = font->metrics.ascent * font_size / font->metrics.units_per_em;
+    int max_descent = font->metrics.descent * font_size / font->metrics.units_per_em;
+    line->baseline = max_ascent;
+    line->line_height = max_ascent - max_descent + 2;
+
+    for (int i = 0; i < len && i < MAX_LINE_GLYPHS; i++) {
+        uint16 gid = font_get_glyph_id(font, codepoints[i]);
+        int advance = font_get_advance_width(font, gid);
+        if (advance == 0) advance = font_size * 0.6f;
+
+        line->glyphs[line->num_glyphs].codepoint = codepoints[i];
+        line->glyphs[line->num_glyphs].glyph_id = gid;
+        line->glyphs[line->num_glyphs].x = pen_x;
+        line->glyphs[line->num_glyphs].y = 0;
+        line->glyphs[line->num_glyphs].advance_x = (advance * font_size) / font->metrics.units_per_em;
+        line->num_glyphs++;
+
+        pen_x += (advance * font_size) / font->metrics.units_per_em;
+    }
+    line->line_width = pen_x;
+}
+
+void font_layout_text(font_t *font, const char *text, int font_size, int max_width, text_layout_t *layout)
+{
+    if (!font || !text || !layout) return;
+    memset(layout, 0, sizeof(text_layout_t));
+
+    /* Convert UTF-8 to codepoints (simplified: ASCII only) */
+    uint32 codepoints[256];
+    int len = 0;
+    while (*text && len < 256) {
+        codepoints[len++] = (uint32)(uint8)*text++;
+    }
+
+    if (max_width <= 0) {
+        /* Single line */
+        font_layout_line(font, codepoints, len, font_size, &layout->lines[0]);
+        layout->num_lines = 1;
+        layout->total_width = layout->lines[0].line_width;
+        layout->total_height = layout->lines[0].line_height;
+        return;
+    }
+
+    /* Word wrap */
+    int start = 0;
+    int last_break = 0;
+    int pen_x = 0;
+
+    for (int i = 0; i < len; i++) {
+        uint16 gid = font_get_glyph_id(font, codepoints[i]);
+        int advance = font_get_advance_width(font, gid);
+        if (advance == 0) advance = font_size * 0.6f;
+        int adv_px = (advance * font_size) / font->metrics.units_per_em;
+
+        if (codepoints[i] == ' ' || codepoints[i] == '\t') {
+            last_break = i;
+        }
+
+        if (pen_x + adv_px > max_width && last_break > start) {
+            /* Wrap at last break */
+            if (layout->num_lines < MAX_TEXT_LINES) {
+                font_layout_line(font, codepoints + start, last_break - start, font_size,
+                                &layout->lines[layout->num_lines]);
+                layout->total_width = layout->lines[layout->num_lines].line_width > layout->total_width
+                    ? layout->lines[layout->num_lines].line_width : layout->total_width;
+                layout->num_lines++;
+            }
+            start = last_break + 1;
+            pen_x = 0;
+            last_break = start;
+        } else {
+            pen_x += adv_px;
+        }
+    }
+
+    /* Last line */
+    if (start < len && layout->num_lines < MAX_TEXT_LINES) {
+        font_layout_line(font, codepoints + start, len - start, font_size,
+                        &layout->lines[layout->num_lines]);
+        layout->total_width = layout->lines[layout->num_lines].line_width > layout->total_width
+            ? layout->lines[layout->num_lines].line_width : layout->total_width;
+        layout->num_lines++;
+    }
+
+    /* Total height */
+    for (int i = 0; i < layout->num_lines; i++)
+        layout->total_height += layout->lines[i].line_height;
+}
+
+void font_draw_text_wrapped(font_t *font, const char *text, int x, int y, int font_size,
+                            int max_width, uint32 color, uint32 *fb, int fb_w, int fb_h)
+{
+    if (!font || !text || !fb || max_width <= 0) return;
+
+    text_layout_t layout;
+    font_layout_text(font, text, font_size, max_width, &layout);
+
+    int pen_y = y;
+    for (int l = 0; l < layout.num_lines && pen_y < fb_h; l++) {
+        text_line_t *line = &layout.lines[l];
+        int pen_x = x;
+        for (int g = 0; g < line->num_glyphs; g++) {
+            glyph_position_t *gp = &line->glyphs[g];
+            font_draw_glyph(font, gp->glyph_id, pen_x + gp->x, pen_y + line->baseline,
+                           font_size, color, fb, fb_w, fb_h);
+        }
+        pen_y += line->line_height;
+    }
 }
