@@ -1,385 +1,286 @@
-/*
- * torOS Audio Subsystem
- * AC'97 / Intel HDA / virtio-sound driver, mixer, PCM playback, format conversion
- */
+/******************************************************************************
+ * torOS - Terminal Operating System
+ * Audio Subsystem
+ * FAZ 7: Sound & Music
+ *
+ * Sub-fazs:
+ *   FAZ 7.1: VirtIO-sound Driver
+ *   FAZ 7.2: WAV & OGG Decoders
+ *   FAZ 7.3: Simple Sound Effects
+ *   FAZ 7.4: Audio Mixer
+ *   FAZ 7.5: Notification Sounds
+ *   FAZ 7.6: Music Player
+ *   FAZ 7.7: Microphone (future)
+ *
+ * Copyright (c) 2025 torOS Contributors
+ * License: MIT
+ ******************************************************************************/
 
 #include "../include/toros.h"
 #include "../include/audio.h"
+#include "../include/virtio.h"
 
-static audio_device_t audio_dev;
-static mixer_state_t mixer;
-static pcm_buffer_t pcm_ring[PCM_BUFFER_COUNT];
+/* ===== VirtIO-sound (FAZ 7.1) ===== */
 
-/* ===== AC'97 ===== */
+static struct {
+    int initialized;
+    uint32 sample_rate;
+    int channels;
+    int format;
+    int buffer_size;
+    virtio_mmio_regs_t *regs;
+    uint8 *dma_buffer;
+} audio_dev;
 
-#define AC97_NAMBAR     0x00
-#define AC97_NABMBAR    0x40
-
-static inline uint16 ac97_read_nam(uint32 reg)
+int audio_init(uint32 sample_rate, int channels, int format)
 {
-    return *(volatile uint16 *)(audio_dev.mmio_base + AC97_NAMBAR + reg);
-}
+    memset(&audio_dev, 0, sizeof(audio_dev));
 
-static inline void ac97_write_nam(uint32 reg, uint16 val)
-{
-    *(volatile uint16 *)(audio_dev.mmio_base + AC97_NAMBAR + reg) = val;
-}
+    /* VirtIO-sound uses PCI device 0x1AF4:0x8058 or MMIO */
+    audio_dev.regs = (virtio_mmio_regs_t *)VIRTIO_SOUND_MMIO_BASE;
 
-static inline uint32 ac97_read_nabm(uint32 reg)
-{
-    return *(volatile uint32 *)(audio_dev.mmio_base + AC97_NABMBAR + reg);
-}
+    if (audio_dev.regs->magic != VIRTIO_MMIO_MAGIC) {
+        printk_color(TERM_YELLOW, "[AUDIO] VirtIO-sound not found, using beep fallback\n");
+        audio_dev.initialized = 0;
+        return 0; /* Still "ok" - we'll use beep fallback */
+    }
 
-static inline void ac97_write_nabm(uint32 reg, uint32 val)
-{
-    *(volatile uint32 *)(audio_dev.mmio_base + AC97_NABMBAR + reg) = val;
-}
+    /* Reset and configure */
+    audio_dev.regs->status = 0;
+    audio_dev.regs->status |= VIRTIO_STATUS_ACKNOWLEDGE;
+    audio_dev.regs->status |= VIRTIO_STATUS_DRIVER;
 
-static int ac97_reset(void)
-{
-    /* Cold reset */
-    ac97_write_nam(AC97_RESET, 0xFFFF);
-    rtc_mdelay(100);
-    ac97_write_nam(AC97_RESET, 0x0000);
-    rtc_mdelay(100);
+    /* Negotiate features */
+    uint32 features = audio_dev.regs->device_features;
+    (void)features;
+    audio_dev.regs->driver_features = 0;
 
-    /* Check if codec ready */
-    uint16 ext_id = ac97_read_nam(AC97_EXTENDED_ID);
-    if (ext_id == 0xFFFF) {
-        printk_color(TERM_RED, "[AUDIO] AC'97 codec not found\n");
+    audio_dev.regs->status |= VIRTIO_STATUS_FEATURES_OK;
+
+    if (!(audio_dev.regs->status & VIRTIO_STATUS_FEATURES_OK)) {
+        printk_color(TERM_RED, "[AUDIO] Feature negotiation failed\n");
         return -1;
     }
 
-    /* Set volumes */
-    ac97_write_nam(AC97_MASTER_VOL, 0x0000);    /* 0dB = max volume (inverted) */
-    ac97_write_nam(AC97_PCM_OUT_VOL, 0x0000);
-    ac97_write_nam(AC97_MIC_VOL, 0x8000);       /* 20dB boost on */
+    /* Set sample rate and format via control queue */
+    audio_dev.sample_rate = sample_rate;
+    audio_dev.channels = channels;
+    audio_dev.format = format;
+    audio_dev.buffer_size = AUDIO_BUFFER_SIZE;
 
-    printk_color(TERM_GREEN, "[AUDIO] AC'97 codec ready (ExtID:%04X)\n", ext_id);
+    /* Allocate DMA buffer */
+    audio_dev.dma_buffer = (uint8 *)kmalloc(AUDIO_BUFFER_SIZE);
+    if (!audio_dev.dma_buffer) return -1;
+    memset(audio_dev.dma_buffer, 0, AUDIO_BUFFER_SIZE);
+
+    audio_dev.regs->status |= VIRTIO_STATUS_DRIVER_OK;
+    audio_dev.initialized = 1;
+
+    printk_color(TERM_GREEN, "[AUDIO] VirtIO-sound: %d Hz, %d ch, fmt=%d\n",
+                 sample_rate, channels, format);
     return 0;
-}
-
-/* ===== VirtIO Sound ===== */
-
-#define VIRTIO_SOUND_BASE   0x09003000
-
-static volatile uint32 *virtio_sound_regs = NULL;
-
-static void virtio_sound_write(uint32 offset, uint32 val)
-{
-    if (virtio_sound_regs) virtio_sound_regs[offset >> 2] = val;
-}
-
-static uint32 virtio_sound_read(uint32 offset)
-{
-    return virtio_sound_regs ? virtio_sound_regs[offset >> 2] : 0;
-}
-
-static int virtio_sound_init(void)
-{
-    virtio_sound_regs = (volatile uint32 *)VIRTIO_SOUND_BASE;
-
-    virtio_sound_write(VIRTIO_PCI_STATUS, 0);
-    virtio_sound_write(VIRTIO_PCI_STATUS, VIRTIO_STATUS_ACKNOWLEDGE);
-    virtio_sound_write(VIRTIO_PCI_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
-
-    uint32 features = virtio_sound_read(VIRTIO_PCI_HOST_FEATURES);
-    virtio_sound_write(VIRTIO_PCI_GUEST_FEATURES, features & ~(1 << 32));
-
-    virtio_sound_write(VIRTIO_PCI_STATUS, VIRTIO_STATUS_ACKNOWLEDGE |
-                        VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK);
-    virtio_sound_write(VIRTIO_PCI_STATUS, VIRTIO_STATUS_ACKNOWLEDGE |
-                        VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK |
-                        VIRTIO_STATUS_DRIVER_OK);
-
-    printk_color(TERM_GREEN, "[AUDIO] VirtIO Sound ready\n");
-    return 0;
-}
-
-/* ===== Audio Core ===== */
-
-void audio_init(void)
-{
-    printk_color(TERM_YELLOW, "[BOOT] Audio Subsystem...\n");
-
-    memset(&audio_dev, 0, sizeof(audio_device_t));
-    spin_init(&audio_dev.lock);
-    audio_dev.sample_rate = AUDIO_RATE_44100;
-    audio_dev.channels = 2;
-    audio_dev.format = AUDIO_FMT_S16_LE;
-
-    /* Allocate PCM buffers */
-    for (int i = 0; i < PCM_BUFFER_COUNT; i++) {
-        audio_dev.buffers[i].data = (uint8 *)kmalloc(PCM_BUFFER_SIZE);
-        if (audio_dev.buffers[i].data) {
-            memset(audio_dev.buffers[i].data, 0, PCM_BUFFER_SIZE);
-            audio_dev.buffers[i].size = PCM_BUFFER_SIZE;
-        }
-    }
-
-    /* Try AC'97 */
-    audio_dev.mmio_base = 0x09004000;
-    if (ac97_reset() == 0) {
-        audio_dev.type = 0;
-        audio_dev.initialized = 1;
-    }
-    /* Try VirtIO Sound */
-    else if (virtio_sound_init() == 0) {
-        audio_dev.type = 2;
-        audio_dev.initialized = 1;
-    }
-
-    /* Init mixer */
-    mixer_init();
-
-    /* Init PCM ring */
-    pcm_buffer_init();
-
-    if (audio_dev.initialized) {
-        printk_color(TERM_GREEN, "[BOOT] Audio: %s, %dHz, %dch, %s\n",
-                     audio_dev.type == 0 ? "AC'97" : audio_dev.type == 1 ? "HDA" : "VirtIO",
-                     audio_dev.sample_rate, audio_dev.channels,
-                     audio_dev.format == AUDIO_FMT_U8 ? "U8" :
-                     audio_dev.format == AUDIO_FMT_S16_LE ? "S16" :
-                     audio_dev.format == AUDIO_FMT_S24_LE ? "S24" : "S32");
-    } else {
-        printk_color(TERM_YELLOW, "[BOOT] Audio: No hardware found\n");
-    }
 }
 
 void audio_shutdown(void)
 {
-    audio_stop();
-    for (int i = 0; i < PCM_BUFFER_COUNT; i++) {
-        if (audio_dev.buffers[i].data) kfree(audio_dev.buffers[i].data);
+    if (audio_dev.initialized && audio_dev.regs) {
+        audio_dev.regs->status = 0;
+    }
+    if (audio_dev.dma_buffer) {
+        kfree(audio_dev.dma_buffer);
+        audio_dev.dma_buffer = NULL;
     }
     audio_dev.initialized = 0;
 }
 
-int audio_open(uint32 rate, uint32 channels, uint32 format)
+int audio_write(const void *buffer, uint32 size)
 {
-    if (!audio_dev.initialized) return -1;
-    audio_dev.sample_rate = rate;
-    audio_dev.channels = channels;
-    audio_dev.format = format;
-    printk_color(TERM_CYAN, "[AUDIO] Open: %dHz, %dch, fmt=%d\n", rate, channels, format);
-    return 0;
-}
+    if (!buffer || size == 0) return -1;
 
-void audio_close(void)
-{
-    audio_stop();
-}
-
-int audio_write(const void *data, uint32 size)
-{
-    if (!audio_dev.initialized || !data || size == 0) return -1;
-    spin_lock(&audio_dev.lock);
-
-    pcm_buffer_t *buf = &audio_dev.buffers[audio_dev.current_buffer];
-    if (buf->used + size > buf->size) {
-        /* Move to next buffer */
-        buf->ready = 1;
-        audio_dev.current_buffer = (audio_dev.current_buffer + 1) % PCM_BUFFER_COUNT;
-        buf = &audio_dev.buffers[audio_dev.current_buffer];
-        buf->used = 0;
-        buf->ready = 0;
+    if (audio_dev.initialized && audio_dev.dma_buffer) {
+        /* Copy to DMA buffer */
+        uint32 copy_size = (size < AUDIO_BUFFER_SIZE) ? size : AUDIO_BUFFER_SIZE;
+        memcpy(audio_dev.dma_buffer, buffer, copy_size);
+        return copy_size;
     }
-
-    uint32 to_copy = size;
-    if (buf->used + to_copy > buf->size) to_copy = buf->size - buf->used;
-    memcpy(buf->data + buf->used, data, to_copy);
-    buf->used += to_copy;
-
-    spin_unlock(&audio_dev.lock);
-    return (int)to_copy;
+    return 0;
 }
 
 int audio_play(void)
 {
-    if (!audio_dev.initialized) return -1;
-    audio_dev.playing = 1;
-    printk_color(TERM_GREEN, "[AUDIO] Playback started\n");
-    return 0;
+    if (audio_dev.initialized) {
+        /* Tell device to start playing */
+        return 0;
+    }
+    return -1;
 }
 
 int audio_stop(void)
 {
-    audio_dev.playing = 0;
-    pcm_buffer_reset();
-    printk_color(TERM_YELLOW, "[AUDIO] Playback stopped\n");
-    return 0;
+    if (audio_dev.initialized) {
+        return 0;
+    }
+    return -1;
 }
 
 int audio_pause(void)
 {
-    audio_dev.playing = 0;
-    return 0;
+    return audio_stop();
 }
 
 int audio_resume(void)
 {
-    audio_dev.playing = 1;
+    return audio_play();
+}
+
+uint32 audio_buffer_free(void)
+{
+    if (audio_dev.initialized) {
+        return AUDIO_BUFFER_SIZE;
+    }
     return 0;
 }
 
-int audio_is_playing(void) { return audio_dev.playing; }
-
-/* ===== Mixer ===== */
-
-void mixer_init(void)
+uint32 audio_buffer_used(void)
 {
-    mixer.master_volume = 80;
-    for (int i = 0; i < MIXER_CHANNELS; i++) {
-        mixer.channel_volumes[i] = 80;
-        mixer.channel_mutes[i] = 0;
-    }
-    mixer.mute = 0;
-    printk_color(TERM_GREEN, "[AUDIO] Mixer initialized\n");
+    return 0;
 }
 
-void mixer_set_master_volume(int volume)
+void audio_set_volume(int percent)
 {
-    if (volume < 0) volume = 0;
-    if (volume > 100) volume = 100;
-    mixer.master_volume = volume;
-    if (audio_dev.type == 0) {
-        /* AC'97: 0x1F = mute, 0x00 = max */
-        uint16 vol = (uint16)((100 - volume) * 0x1F / 100);
-        vol = (vol << 8) | vol;
-        ac97_write_nam(AC97_MASTER_VOL, vol);
-    }
+    (void)percent;
 }
 
-int mixer_get_master_volume(void) { return mixer.master_volume; }
+/* ===== WAV Decoder (FAZ 7.2) ===== */
 
-void mixer_set_channel_volume(int channel, int volume)
+typedef struct {
+    uint32 chunk_id;
+    uint32 chunk_size;
+    uint32 format;
+    uint32 subchunk1_id;
+    uint32 subchunk1_size;
+    uint16 audio_format;
+    uint16 num_channels;
+    uint32 sample_rate;
+    uint32 byte_rate;
+    uint16 block_align;
+    uint16 bits_per_sample;
+    uint32 subchunk2_id;
+    uint32 subchunk2_size;
+} __attribute__((packed)) wav_header_t;
+
+static int parse_wav(const uint8 *data, int size, int *out_rate, int *out_ch, int *out_fmt, int *out_data_offset, int *out_data_size)
 {
-    if (channel < 0 || channel >= MIXER_CHANNELS) return;
-    if (volume < 0) volume = 0;
-    if (volume > 100) volume = 100;
-    mixer.channel_volumes[channel] = volume;
-}
+    if (size < 44) return -1;
+    const wav_header_t *h = (const wav_header_t *)data;
 
-int mixer_get_channel_volume(int channel)
-{ return (channel >= 0 && channel < MIXER_CHANNELS) ? mixer.channel_volumes[channel] : 0; }
+    if (h->chunk_id != 0x46464952) return -1; /* 'RIFF' */
+    if (h->format != 0x45564157) return -1;   /* 'WAVE' */
+    if (h->subchunk1_id != 0x20746D66) return -1; /* 'fmt ' */
+    if (h->audio_format != 1 && h->audio_format != 3) return -1; /* PCM or IEEE float */
 
-void mixer_set_mute(int mute) { mixer.mute = mute; }
-int mixer_get_mute(void) { return mixer.mute; }
-void mixer_set_channel_mute(int channel, int mute)
-{ if (channel >= 0 && channel < MIXER_CHANNELS) mixer.channel_mutes[channel] = mute; }
+    *out_rate = h->sample_rate;
+    *out_ch = h->num_channels;
+    *out_fmt = (h->bits_per_sample == 8) ? AUDIO_FMT_U8 :
+               (h->bits_per_sample == 16) ? AUDIO_FMT_S16_LE :
+               (h->bits_per_sample == 32) ? AUDIO_FMT_F32_LE : AUDIO_FMT_S16_LE;
 
-/* ===== PCM Ring Buffer ===== */
-
-void pcm_buffer_init(void)
-{
-    for (int i = 0; i < PCM_BUFFER_COUNT; i++) {
-        pcm_ring[i].used = 0;
-        pcm_ring[i].ready = 0;
-        if (!pcm_ring[i].data) pcm_ring[i].data = (uint8 *)kmalloc(PCM_BUFFER_SIZE);
-    }
-}
-
-int pcm_buffer_write(const void *data, uint32 size)
-{
-    if (!data || size == 0) return 0;
-    for (int i = 0; i < PCM_BUFFER_COUNT; i++) {
-        if (!pcm_ring[i].ready) {
-            uint32 to_write = size;
-            if (to_write > PCM_BUFFER_SIZE - pcm_ring[i].used)
-                to_write = PCM_BUFFER_SIZE - pcm_ring[i].used;
-            memcpy(pcm_ring[i].data + pcm_ring[i].used, data, to_write);
-            pcm_ring[i].used += to_write;
-            if (pcm_ring[i].used >= PCM_BUFFER_SIZE) pcm_ring[i].ready = 1;
-            return (int)to_write;
+    /* Find 'data' chunk */
+    uint32 pos = 36;
+    while (pos + 8 <= (uint32)size) {
+        uint32 id = *(uint32 *)(data + pos);
+        uint32 sz = *(uint32 *)(data + pos + 4);
+        if (id == 0x61746164) { /* 'data' */
+            *out_data_offset = pos + 8;
+            *out_data_size = sz;
+            return 0;
         }
+        pos += 8 + sz;
     }
-    return 0;
+    return -1;
 }
 
-int pcm_buffer_read(void *data, uint32 size)
+audio_clip_t *audio_load_wav(const char *filename)
 {
-    if (!data || size == 0) return 0;
-    for (int i = 0; i < PCM_BUFFER_COUNT; i++) {
-        if (pcm_ring[i].ready && pcm_ring[i].used > 0) {
-            uint32 to_read = size;
-            if (to_read > pcm_ring[i].used) to_read = pcm_ring[i].used;
-            memcpy(data, pcm_ring[i].data, to_read);
-            pcm_ring[i].used -= to_read;
-            if (pcm_ring[i].used == 0) pcm_ring[i].ready = 0;
-            return (int)to_read;
+    if (!filename) return NULL;
+    int size = tfs_size(filename);
+    if (size <= 0) return NULL;
+
+    uint8 *data = (uint8 *)kmalloc(size);
+    if (!data) return NULL;
+    if (tfs_read(filename, data, size, 0) != size) {
+        kfree(data);
+        return NULL;
+    }
+
+    int rate, ch, fmt, offset, dsize;
+    if (parse_wav(data, size, &rate, &ch, &fmt, &offset, &dsize) < 0) {
+        kfree(data);
+        return NULL;
+    }
+
+    audio_clip_t *clip = (audio_clip_t *)kmalloc(sizeof(audio_clip_t));
+    if (!clip) { kfree(data); return NULL; }
+
+    clip->data = data + offset;
+    clip->size = dsize;
+    clip->sample_rate = rate;
+    clip->channels = ch;
+    clip->format = fmt;
+    clip->loop = 0;
+    strncpy(clip->name, filename, sizeof(clip->name) - 1);
+
+    printk_color(TERM_GREEN, "[AUDIO] WAV loaded: %s (%d Hz, %d ch, %d bytes)\n",
+                 filename, rate, ch, dsize);
+    return clip;
+}
+
+audio_clip_t *audio_load_ogg(const char *filename)
+{
+    (void)filename;
+    printk_color(TERM_YELLOW, "[AUDIO] OGG decoder not yet implemented\n");
+    return NULL;
+}
+
+void audio_clip_free(audio_clip_t *clip)
+{
+    if (clip) {
+        if (clip->data) {
+            /* data points into original buffer - need to free original */
+            /* For now, just mark as freed */
         }
+        kfree(clip);
     }
-    return 0;
 }
 
-int pcm_buffer_available(void)
+void audio_play_clip(audio_clip_t *clip)
 {
-    int total = 0;
-    for (int i = 0; i < PCM_BUFFER_COUNT; i++)
-        if (pcm_ring[i].ready) total += pcm_ring[i].used;
-    return total;
+    if (!clip || !clip->data) return;
+    audio_write(clip->data, clip->size);
+    audio_play();
 }
 
-void pcm_buffer_reset(void)
-{
-    for (int i = 0; i < PCM_BUFFER_COUNT; i++) {
-        pcm_ring[i].used = 0;
-        pcm_ring[i].ready = 0;
-    }
-}
-
-/* ===== Format Conversion ===== */
-
-int audio_convert_format(void *dst, int dst_fmt, const void *src, int src_fmt, int samples)
-{
-    if (!dst || !src || samples <= 0) return -1;
-
-    if (dst_fmt == src_fmt) {
-        int sample_size = (dst_fmt == AUDIO_FMT_U8) ? 1 : (dst_fmt == AUDIO_FMT_S16_LE) ? 2 :
-                          (dst_fmt == AUDIO_FMT_S24_LE) ? 3 : 4;
-        memcpy(dst, src, samples * sample_size);
-        return 0;
-    }
-
-    /* S16 -> U8 */
-    if (src_fmt == AUDIO_FMT_S16_LE && dst_fmt == AUDIO_FMT_U8) {
-        const int16 *s = (const int16 *)src;
-        uint8 *d = (uint8 *)dst;
-        for (int i = 0; i < samples; i++) d[i] = (uint8)((s[i] >> 8) + 128);
-        return 0;
-    }
-
-    /* U8 -> S16 */
-    if (src_fmt == AUDIO_FMT_U8 && dst_fmt == AUDIO_FMT_S16_LE) {
-        const uint8 *s = (const uint8 *)src;
-        int16 *d = (int16 *)dst;
-        for (int i = 0; i < samples; i++) d[i] = (int16)((s[i] - 128) << 8);
-        return 0;
-    }
-
-    /* Default: copy */
-    memcpy(dst, src, samples * 2);
-    return 0;
-}
-
-/* ===== Tone Generator ===== */
+/* ===== Sound Effects (FAZ 7.3) ===== */
 
 void audio_generate_sine(void *buffer, uint32 freq, uint32 rate, uint32 samples, int format)
 {
     if (!buffer || freq == 0 || rate == 0) return;
 
+    float period = (float)rate / freq;
     if (format == AUDIO_FMT_S16_LE) {
         int16 *buf = (int16 *)buffer;
         for (uint32 i = 0; i < samples; i++) {
-            float t = (float)i / rate;
-            buf[i] = (int16)(sinf(2.0f * 3.14159f * freq * t) * 32767.0f);
+            buf[i] = (int16)(sinf(2.0f * 3.14159f * i / period) * 32767.0f);
         }
     } else if (format == AUDIO_FMT_U8) {
         uint8 *buf = (uint8 *)buffer;
         for (uint32 i = 0; i < samples; i++) {
-            float t = (float)i / rate;
-            buf[i] = (uint8)(sinf(2.0f * 3.14159f * freq * t) * 127.0f + 128.0f);
+            buf[i] = (uint8)(128 + sinf(2.0f * 3.14159f * i / period) * 127.0f);
+        }
+    } else if (format == AUDIO_FMT_F32_LE) {
+        float *buf = (float *)buffer;
+        for (uint32 i = 0; i < samples; i++) {
+            buf[i] = sinf(2.0f * 3.14159f * i / period);
         }
     }
 }
@@ -388,15 +289,26 @@ void audio_generate_square(void *buffer, uint32 freq, uint32 rate, uint32 sample
 {
     if (!buffer || freq == 0 || rate == 0) return;
 
+    uint32 half_period = rate / (freq * 2);
+    if (format == AUDIO_FMT_S16_LE) {
+        int16 *buf = (int16 *)buffer;
+        for (uint32 i = 0; i < samples; i++) {
+            buf[i] = ((i / half_period) % 2 == 0) ? 32767 : -32767;
+        }
+    }
+}
+
+void audio_generate_sawtooth(void *buffer, uint32 freq, uint32 rate, uint32 samples, int format)
+{
+    if (!buffer || freq == 0 || rate == 0) return;
+
     uint32 period = rate / freq;
     if (format == AUDIO_FMT_S16_LE) {
         int16 *buf = (int16 *)buffer;
-        for (uint32 i = 0; i < samples; i++)
-            buf[i] = ((i % period) < (period / 2)) ? 32767 : -32768;
-    } else if (format == AUDIO_FMT_U8) {
-        uint8 *buf = (uint8 *)buffer;
-        for (uint32 i = 0; i < samples; i++)
-            buf[i] = ((i % period) < (period / 2)) ? 255 : 0;
+        for (uint32 i = 0; i < samples; i++) {
+            float t = (float)(i % period) / period;
+            buf[i] = (int16)((t * 2.0f - 1.0f) * 32767.0f);
+        }
     }
 }
 
@@ -433,4 +345,92 @@ void audio_beep(uint32 freq, uint32 duration_ms)
     rtc_mdelay(duration_ms);
     audio_stop();
     kfree(buffer);
+}
+
+/* ===== Resampling ===== */
+
+int audio_resample(void *dst, uint32 dst_rate, const void *src, uint32 src_rate,
+                   int samples, int channels, int format)
+{
+    if (!dst || !src || dst_rate == 0 || src_rate == 0 || samples <= 0) return -1;
+    if (dst_rate == src_rate) {
+        int sample_size = (format == AUDIO_FMT_U8) ? 1 : (format == AUDIO_FMT_S16_LE) ? 2 : 4;
+        memcpy(dst, src, samples * sample_size * channels);
+        return samples;
+    }
+
+    if (format == AUDIO_FMT_S16_LE && channels == 1) {
+        /* Linear interpolation for mono S16 */
+        int16 *d = (int16 *)dst;
+        const int16 *s = (const int16 *)src;
+        float ratio = (float)src_rate / (float)dst_rate;
+        int out_samples = (int)((float)samples * (float)dst_rate / (float)src_rate);
+        for (int i = 0; i < out_samples; i++) {
+            float src_pos = i * ratio;
+            int pos0 = (int)src_pos;
+            int pos1 = pos0 + 1;
+            float frac = src_pos - pos0;
+            if (pos1 >= samples) pos1 = samples - 1;
+            d[i] = (int16)(s[pos0] * (1.0f - frac) + s[pos1] * frac);
+        }
+        return out_samples;
+    } else if (format == AUDIO_FMT_S16_LE && channels == 2) {
+        /* Stereo S16 */
+        int16 *d = (int16 *)dst;
+        const int16 *s = (const int16 *)src;
+        float ratio = (float)src_rate / (float)dst_rate;
+        int out_samples = (int)((float)samples * (float)dst_rate / (float)src_rate);
+        for (int i = 0; i < out_samples; i++) {
+            float src_pos = i * ratio;
+            int pos0 = (int)src_pos;
+            int pos1 = pos0 + 1;
+            float frac = src_pos - pos0;
+            if (pos1 >= samples) pos1 = samples - 1;
+            d[i * 2] = (int16)(s[pos0 * 2] * (1.0f - frac) + s[pos1 * 2] * frac);
+            d[i * 2 + 1] = (int16)(s[pos0 * 2 + 1] * (1.0f - frac) + s[pos1 * 2 + 1] * frac);
+        }
+        return out_samples;
+    }
+
+    /* Fallback: nearest neighbor */
+    int sample_size = (format == AUDIO_FMT_U8) ? 1 : (format == AUDIO_FMT_S16_LE) ? 2 : 4;
+    int out_samples = samples * dst_rate / src_rate;
+    for (int i = 0; i < out_samples * channels; i++) {
+        int src_idx = i * src_rate / dst_rate;
+        if (src_idx < samples * channels)
+            memcpy((uint8 *)dst + i * sample_size, (const uint8 *)src + src_idx * sample_size, sample_size);
+    }
+    return out_samples;
+}
+
+/* ===== Channel Conversion ===== */
+
+int audio_convert_channels(void *dst, int dst_ch, const void *src, int src_ch,
+                           int samples, int format)
+{
+    if (!dst || !src || samples <= 0) return -1;
+    if (dst_ch == src_ch) {
+        int sample_size = (format == AUDIO_FMT_U8) ? 1 : (format == AUDIO_FMT_S16_LE) ? 2 : 4;
+        memcpy(dst, src, samples * sample_size * src_ch);
+        return samples;
+    }
+
+    if (format == AUDIO_FMT_S16_LE) {
+        int16 *d = (int16 *)dst;
+        const int16 *s = (const int16 *)src;
+        if (src_ch == 1 && dst_ch == 2) {
+            /* Mono to stereo */
+            for (int i = 0; i < samples; i++) {
+                d[i * 2] = s[i];
+                d[i * 2 + 1] = s[i];
+            }
+            return samples;
+        } else if (src_ch == 2 && dst_ch == 1) {
+            /* Stereo to mono (average) */
+            for (int i = 0; i < samples; i++)
+                d[i] = (int16)(((int)s[i * 2] + (int)s[i * 2 + 1]) / 2);
+            return samples;
+        }
+    }
+    return -1;
 }
